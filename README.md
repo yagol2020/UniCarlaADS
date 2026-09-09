@@ -1,8 +1,65 @@
 # UniCarlaADS
 
-一个基于Docker的统一自动驾驶系统CARLA仿真运行框架
+一个基于 Docker 的统一自动驾驶系统 CARLA 运行框架。当前先实现 InterFuser。
 
-# 目前支持的自动驾驶系统
+UniCarlaADS 不推进仿真场景：外部程序负责创建 ego、调用 `world.tick()` 并应用控制信号。InterFuser 容器负责部署模型传感器，并根据外部产生的 frame 返回控制量。
 
-* InterFuser
-* LEAD
+InterFuser 镜像内使用仓库中的 `agents09101`，其 CARLA Python API 则从官方 `carlasim/carla:0.9.10.1` 镜像取得。
+
+## InterFuser
+
+构建 ADS 镜像：
+
+```bash
+./scripts/build_interfuser.sh
+```
+
+启动官方 CARLA 0.9.10.1 镜像：
+
+```bash
+./scripts/start_carla_0910.sh
+```
+
+该脚本使用 `DISPLAY=`、`SDL_VIDEODRIVER=offscreen` 和 `-opengl`，可在无头服务器上运行。启动时出现 `xdg-user-dir: not found` 是该官方镜像的提示，不影响 CARLA 服务。
+
+外部程序先连接 CARLA，将 world 设置为同步模式、设置固定步长（InterFuser 默认使用 `0.05` 秒）并创建 ego，然后调用：
+
+```python
+from service import ADS
+
+settings = world.get_settings()
+settings.synchronous_mode = True
+settings.fixed_delta_seconds = 0.05
+world.apply_settings(settings)
+
+ads = ADS("interfuser")
+ads.init()
+deploy_result = ads.deploy(
+    ego_actor_id=ego.id,
+    route=[
+        {"x": 5.7, "y": 91.5, "z": 0.0},
+        {"x": 35.0, "y": 69.2, "z": 0.0},
+    ],
+)
+
+try:
+    while True:
+        frame_id = world.tick()
+        result = ads.step(frame_id)
+        control = result["control"]
+        ego.apply_control(
+            carla.VehicleControl(
+                steer=control["steer"],
+                throttle=control["throttle"],
+                brake=control["brake"],
+            )
+        )
+finally:
+    video_path = ads.download_gui()
+    print("GUI 视频已下载到 {}".format(video_path))
+    ads.close()
+```
+
+`download_gui()` 会将仿真期间保存在容器内存中的 ADS GUI 帧编码为 MP4。默认保存到宿主机的 `video_download` 目录，也可以通过 `output_dir`、`filename` 和 `fps` 指定输出位置、文件名和帧率。该接口需要在 `close()` 前调用。
+
+`deploy()` 内部会调用 InterFuser 原有的传感器包装器，部署阶段会产生一次 tick。`deploy()` 返回值中的 `setup_frame` 就是该帧。之后的场景推进全部由外部程序控制。

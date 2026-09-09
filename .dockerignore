@@ -1,0 +1,13 @@
+.git
+.vscode
+lead
+InterFuser/.git
+InterFuser/results
+InterFuser/dataset
+InterFuser/data_collection
+InterFuser/assets
+InterFuser/tools
+InterFuser/**/*.pyc
+**/__pycache__
+tests
+agents0913

@@ -1,2 +1,5 @@
 AGENTS.md
 .vscode/
+__pycache__/
+*.pyc
+/video_download/
