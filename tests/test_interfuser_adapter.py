@@ -34,6 +34,39 @@ class InterFuserAdapterTest(unittest.TestCase):
         self.assertIs(memory_display.run_interface({"surface": surface}), surface)
         self.assertEqual(frames, [surface])
 
+    def test_wait_for_snapshot_retries_until_target_frame(self):
+        class Snapshot:
+            def __init__(self, frame):
+                self.frame = frame
+
+        class World:
+            def __init__(self):
+                self.frames = iter([10, 11])
+
+            def get_snapshot(self):
+                return Snapshot(next(self.frames))
+
+        adapter = InterFuserAdapter()
+        adapter._world = World()
+
+        snapshot = adapter._wait_for_snapshot(11)
+
+        self.assertEqual(snapshot.frame, 11)
+
+    def test_wait_for_snapshot_rejects_skipped_frame(self):
+        class Snapshot:
+            frame = 12
+
+        class World:
+            def get_snapshot(self):
+                return Snapshot()
+
+        adapter = InterFuserAdapter()
+        adapter._world = World()
+
+        with self.assertRaisesRegex(ValueError, "其他客户端调用 world.tick"):
+            adapter._wait_for_snapshot(11)
+
 
 if __name__ == "__main__":
     unittest.main()

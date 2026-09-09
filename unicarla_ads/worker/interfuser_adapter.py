@@ -5,6 +5,7 @@ import math
 import os
 import tempfile
 import threading
+import time
 
 from .frame_sensor_interface import FrameSensorInterface
 
@@ -172,14 +173,7 @@ class InterFuserAdapter:
             from srunner.scenariomanager.carla_data_provider import CarlaDataProvider
             from srunner.scenariomanager.timer import GameTime
 
-            snapshot = self._world.get_snapshot()
-            if snapshot.frame != frame_id:
-                raise ValueError(
-                    "CARLA 当前 frame 为 {}，请求的是 {}".format(
-                        snapshot.frame,
-                        frame_id,
-                    )
-                )
+            snapshot = self._wait_for_snapshot(frame_id)
 
             GameTime.on_carla_tick(snapshot.timestamp)
             CarlaDataProvider.on_carla_tick()
@@ -220,6 +214,33 @@ class InterFuserAdapter:
             self.last_error = None
             self._last_result = result
             return dict(result)
+
+    def _wait_for_snapshot(self, frame_id, timeout=1.0):
+        """等待当前 CARLA 客户端同步到指定帧。"""
+        deadline = time.monotonic() + float(timeout)
+
+        while True:
+            snapshot = self._world.get_snapshot()
+            if snapshot.frame == frame_id:
+                return snapshot
+            if snapshot.frame > frame_id:
+                raise ValueError(
+                    "CARLA 已推进到 frame {}，请求的 frame {} 已被跳过，"
+                    "请检查是否有其他客户端调用 world.tick()".format(
+                        snapshot.frame,
+                        frame_id,
+                    )
+                )
+            if time.monotonic() >= deadline:
+                raise RuntimeError(
+                    "等待 CARLA frame {} 超时，当前 frame 为 {}".format(
+                        frame_id,
+                        snapshot.frame,
+                    )
+                )
+
+            # 等待 CARLA 客户端接收已经产生的目标帧，不主动推进仿真。
+            time.sleep(0.005)
 
     def render_gui_video(self, fps=20.0):
         """将内存中的 GUI 帧编码为 MP4。"""

@@ -23,7 +23,7 @@ except ImportError as exc:
 from service import ADS
 
 FIXED_DELTA_SECONDS = 0.05
-MIN_ROUTE_DISTANCE = 50.0
+MAX_ROUTE_DISTANCE = 100
 ARRIVAL_DISTANCE = 5.0
 
 
@@ -34,7 +34,7 @@ def parse_args():
     parser.add_argument(
         "--max-ticks",
         type=int,
-        default=5000,
+        default=1000,
         help="本次仿真的最大 tick 数",
     )
     parser.add_argument("--seed", type=int, help="随机种子")
@@ -56,11 +56,11 @@ def spawn_ego(world, spawn_points):
 
 
 def choose_destination(spawn_points, start_location):
-    """随机选择一个与起点距离足够远的终点。"""
+    """随机选择一个与起点距离足够近的终点。"""
     candidates = [
         transform
         for transform in spawn_points
-        if transform.location.distance(start_location) >= MIN_ROUTE_DISTANCE
+        if transform.location.distance(start_location) <= MAX_ROUTE_DISTANCE
     ]
     if not candidates:
         raise RuntimeError("当前地图中找不到合适的随机终点")
