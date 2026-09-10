@@ -1,4 +1,4 @@
-"""按 CARLA frame 聚合 InterFuser 传感器数据。"""
+"""按 CARLA frame 聚合 ADS 传感器数据。"""
 
 import threading
 import time
@@ -10,7 +10,7 @@ class SensorFrameTimeout(RuntimeError):
 
 
 class FrameSensorInterface:
-    """实现 InterFuser Callback 所需的最小传感器接口。"""
+    """实现 Leaderboard Callback 所需的最小传感器接口。"""
 
     def __init__(self, max_frames=8):
         self._condition = threading.Condition()

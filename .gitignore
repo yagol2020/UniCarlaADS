@@ -3,3 +3,4 @@ AGENTS.md
 __pycache__/
 *.pyc
 /video_download/
+*.pyc

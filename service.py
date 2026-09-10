@@ -14,6 +14,11 @@ class ADSRequestError(RuntimeError):
 class ADS:
     """管理单个 ADS 容器并调用其 HTTP 接口。"""
 
+    DEFAULT_IMAGES = {
+        "interfuser": "unicarlaads-interfuser:latest",
+        "lead": "unicarlaads-lead:latest",
+    }
+
     def __init__(
         self,
         name="interfuser",
@@ -22,19 +27,19 @@ class ADS:
         container_name=None,
         startup_timeout=30.0,
     ):
-        if name != "interfuser":
-            raise ValueError("当前只支持 interfuser")
+        if name not in self.DEFAULT_IMAGES:
+            raise ValueError("当前支持的 ADS: {}".format(", ".join(self.DEFAULT_IMAGES)))
 
         self.name = name
         self.port = int(port)
-        self.image = image or "unicarlaads-interfuser:latest"
-        self.container_name = container_name or "unicarlaads-interfuser"
+        self.image = image or self.DEFAULT_IMAGES[name]
+        self.container_name = container_name or "unicarlaads-{}".format(name)
         self.startup_timeout = float(startup_timeout)
         self.base_url = "http://127.0.0.1:{}".format(self.port)
         self._container_started = False
 
     def init(self, agent_config=None):
-        """启动容器并加载 InterFuser 模型。"""
+        """启动 ADS 容器并初始化自动驾驶系统。"""
         if self._container_started:
             raise RuntimeError("ADS 容器已经启动")
 
@@ -52,6 +57,8 @@ class ADS:
             "all",
             "--env",
             "UNICARLA_ADS_PORT={}".format(self.port),
+            "--env",
+            "UNICARLA_ADS_NAME={}".format(self.name),
             self.image,
         ]
         result = subprocess.run(command, capture_output=True, text=True)

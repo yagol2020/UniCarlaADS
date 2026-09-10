@@ -7,6 +7,12 @@ from service import ADS
 
 
 class RouteNormalizationTest(unittest.TestCase):
+    def test_lead_uses_its_own_image(self):
+        ads = ADS("lead")
+
+        self.assertEqual(ads.image, "unicarlaads-lead:latest")
+        self.assertEqual(ads.container_name, "unicarlaads-lead")
+
     def test_dictionary_route(self):
         route = ADS._normalize_route(
             [

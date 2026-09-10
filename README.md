@@ -1,8 +1,13 @@
 # UniCarlaADS
 
-一个基于 Docker 的统一自动驾驶系统 CARLA 运行框架。当前先实现 InterFuser。
+一个基于 Docker 的统一自动驾驶系统 CARLA 运行框架。当前支持 InterFuser 和 LEAD。
 
-UniCarlaADS 不推进仿真场景：外部程序负责创建 ego、调用 `world.tick()` 并应用控制信号。InterFuser 容器负责部署模型传感器，并根据外部产生的 frame 返回控制量。
+UniCarlaADS 不推进仿真场景：外部程序负责创建 ego、调用 `world.tick()` 并应用控制信号。ADS 容器负责加载模型、部署传感器，并根据外部产生的 frame 返回控制量。
+
+| ADS | CARLA | ego 车辆 |
+| --- | --- | --- |
+| InterFuser | 0.9.10.1 | `vehicle.lincoln.mkz2017` |
+| LEAD | 0.9.16 | `vehicle.lincoln.mkz_2020` |
 
 InterFuser 镜像内使用仓库中的 `agents09101`，其 CARLA Python API 则从官方 `carlasim/carla:0.9.10.1` 镜像取得。
 
@@ -63,3 +68,28 @@ finally:
 `download_gui()` 会将仿真期间保存在容器内存中的 ADS GUI 帧编码为 MP4。默认保存到宿主机的 `video_download` 目录，也可以通过 `output_dir`、`filename` 和 `fps` 指定输出位置、文件名和帧率。该接口需要在 `close()` 前调用。
 
 `deploy()` 内部会调用 InterFuser 原有的传感器包装器，部署阶段会产生一次 tick。`deploy()` 返回值中的 `setup_frame` 就是该帧。之后的场景推进全部由外部程序控制。
+
+## LEAD
+
+LEAD 使用独立镜像，并复用其仓库自带的 CARLA 0.9.16 agents、标准 Leaderboard、ScenarioRunner 和默认 seed0 检查点。集成代码不会修改 `lead/` 源码。
+
+构建 LEAD 镜像：
+
+```bash
+./scripts/build_lead.sh
+```
+
+首次构建需要下载 LEAD 对应的 PyTorch 2.8 CUDA 12.8 基础镜像，体积较大。启动官方 CARLA 0.9.16 镜像：
+
+```bash
+./scripts/start_carla_0916.sh
+```
+
+宿主侧示例需要 CARLA 0.9.16 Python API，可在 Python 3.10 至 3.12 环境安装：
+
+```bash
+python3.10 -m pip install carla==0.9.16
+python3.10 demo_lead.py
+```
+
+LEAD 要求 world 使用同步模式和 `fixed_delta_seconds=0.05`，ego 的 `role_name` 必须为 `hero`。`deploy()` 使用 LEAD 原有传感器包装器预热传感器，因此部署阶段会产生 10 个 tick；`setup_frame` 是预热后的帧。进入运行阶段后，只有外部程序调用 `world.tick()`，LEAD 的 `step(frame_id)` 只读取该帧并返回控制信号。
