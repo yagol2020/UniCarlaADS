@@ -7,6 +7,7 @@
 ![Docker](https://img.shields.io/badge/Docker-ready-2496ED?style=flat-square&logo=docker&logoColor=white)
 ![CARLA](https://img.shields.io/badge/CARLA-0.9.10.1%20%7C%200.9.15-0B79CE?style=flat-square)
 ![ADS](https://img.shields.io/badge/ADS-InterFuser%20%7C%20LEAD-6f42c1?style=flat-square)
+![License](https://img.shields.io/badge/License-MIT-green?style=flat-square)
 
 </div>
 
@@ -56,15 +57,25 @@ flowchart LR
 ## 快速开始
 
 ```bash
-# 1. 构建 ADS 镜像
+# 0. 拉取源码与子模块（InterFuser、LEAD 已固定到上游 commit）
+git clone --recurse-submodules https://github.com/yagol2020/UniCarlaADS.git
+cd UniCarlaADS
+# 已 clone 过则执行
+git submodule update --init --recursive
+
+# 1. 下载模型权重（权重不在 git 仓库中）
+./scripts/download_interfuser_weights.sh   # InterFuser
+./scripts/download_lead_checkpoint.sh      # LEAD
+
+# 2. 构建 ADS 镜像
 ./scripts/build_interfuser.sh        # InterFuser
 ./scripts/build_lead.sh              # LEAD（首次需下载 PyTorch 2.8 CUDA 12.8 基础镜像）
 
-# 2. 启动对应版本的 CARLA 服务
+# 3. 启动对应版本的 CARLA 服务
 ./scripts/start_carla_0910.sh        # InterFuser
 ./scripts/start_carla_0915.sh        # LEAD
 
-# 3. 在宿主机运行示例
+# 4. 在宿主机运行示例
 python3.8 demo.py                    # InterFuser
 python3.8 demo_lead.py               # LEAD
 ```
@@ -76,6 +87,12 @@ python3.8 demo_lead.py               # LEAD
 # LEAD 在 Python 3.7 - 3.10 环境安装
 python3.8 -m pip install carla==0.9.15
 ```
+
+> [!IMPORTANT]
+> InterFuser 权重与 LEAD 检查点都不在 git 仓库中，必须先用上面的脚本下载。
+> InterFuser 权重默认从本仓库的
+> [GitHub Release](https://github.com/yagol2020/UniCarlaADS/releases/tag/v0.1) 下载，
+> 也可用 `INTERFUSER_WEIGHTS_URL` 指向其他镜像。
 
 ## 运行流程
 
@@ -161,10 +178,43 @@ UniCarlaADS/
 ├── demo.py / demo_lead.py     # 宿主侧示例
 ├── service.py                 # 宿主侧 ADS 调用入口
 ├── docker/                    # InterFuser 与 LEAD 的 Dockerfile
-├── scripts/                   # 构建与启动脚本
+├── scripts/                   # 构建、启动与权重下载脚本
 ├── unicarla_ads/worker/       # 容器内 HTTP 服务与适配器
-├── InterFuser/  lead/         # 上游 ADS 源码（不修改）
-└── video_download/            # GUI 视频输出目录
+├── InterFuser/  lead/         # 上游 ADS 源码（submodule，固定上游 commit，不修改）
+├── video_download/            # GUI 视频输出目录
+├── LICENSE                    # 本项目 MIT 许可
+└── THIRD_PARTY_NOTICES.md     # 第三方许可声明
+```
+
+> [!NOTE]
+> `InterFuser/` 与 `lead/` 是 git submodule，分别固定在上游 `f0be8ea`（InterFuser）
+> 与 `v1.5.0`（LEAD）两个 commit，运行时的差异（GUI 捕获、禁用联网下载等）都在
+> `unicarla_ads/worker/` 适配器里完成，子模块内容保持与上游一致。
+
+## 许可证与致谢
+
+本项目采用 [MIT License](LICENSE)。第三方组件（InterFuser、LEAD、CARLA 等）的许可与版权归属
+见 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)。
+
+## 引用
+
+若本项目对你的研究有帮助，请引用所使用 ADS 的论文：
+
+```bibtex
+@inproceedings{shao2022interfuser,
+  title     = {Safety-Enhanced Autonomous Driving Using Interpretable Sensor Fusion Transformer},
+  author    = {Shao, Hao and Wang, Letian and Chen, RuoBing and Li, Hongsheng and Liu, Yu},
+  booktitle = {Conference on Robot Learning (CoRL)},
+  year      = {2022}
+}
+
+@inproceedings{nguyen2026lead,
+  title     = {LEAD: Minimizing Learner-Expert Asymmetry in End-to-End Driving},
+  author    = {Nguyen, Long and Fauth, Micha and Jaeger, Bernhard and Dauner, Daniel and
+               Igl, Maximilian and Geiger, Andreas and Chitta, Kashyap},
+  booktitle = {Conference on Computer Vision and Pattern Recognition (CVPR)},
+  year      = {2026}
+}
 ```
 
 ---

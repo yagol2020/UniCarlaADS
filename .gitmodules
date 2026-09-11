@@ -1,0 +1,6 @@
+[submodule "InterFuser"]
+	path = InterFuser
+	url = https://github.com/opendilab/InterFuser.git
+[submodule "lead"]
+	path = lead
+	url = https://github.com/kesai-labs/lead.git
