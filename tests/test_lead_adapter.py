@@ -17,6 +17,12 @@ class LeadAdapterTest(unittest.TestCase):
 
         self.assertIn("resnet34_v1.5.0/seed0", adapter.DEFAULT_CONFIG)
 
+    def test_render_gui_video_requires_recording(self):
+        adapter = LeadAdapter()
+
+        with self.assertRaisesRegex(RuntimeError, "没有可下载的 LEAD 视频"):
+            adapter.render_gui_video()
+
 
 if __name__ == "__main__":
     unittest.main()

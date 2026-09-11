@@ -93,3 +93,5 @@ python3.8 demo_lead.py
 ```
 
 LEAD 要求 world 使用同步模式和 `fixed_delta_seconds=0.05`，ego 的 `role_name` 必须为 `hero`。`deploy()` 使用 LEAD 原有传感器包装器预热传感器，因此部署阶段会产生 10 个 tick；`setup_frame` 是预热后的帧。进入运行阶段后，只有外部程序调用 `world.tick()`，LEAD 的 `step(frame_id)` 只读取该帧并返回控制信号。
+
+`deploy()` 会同时打开 LEAD 自带的评估录制，视频内容为演示视角与模型输入拼接的 grid 视频。在 `close()` 前调用 `ads.download_gui()` 可结束视频编码，并把视频下载到宿主机的 `video_download` 目录，`demo_lead.py` 已经包含这一步。

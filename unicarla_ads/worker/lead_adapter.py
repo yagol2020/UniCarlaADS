@@ -1,11 +1,23 @@
 """LEAD 的被动 tick 运行适配器。"""
 
+import os
+import tempfile
 import threading
 import time
 
 import numpy as np
 
 from .frame_sensor_interface import FrameSensorInterface
+
+
+class _SilentVideoWriter:
+    """下载完成后占位，丢弃后续帧，避免写入已关闭的编码器。"""
+
+    def write(self, frame):
+        pass
+
+    def release(self):
+        pass
 
 
 class LeadAdapter:
@@ -30,6 +42,8 @@ class LeadAdapter:
         self._server_version = None
         self._map_name = None
         self._setup_frame = None
+        # 置 UNICARLA_ADS_STEP_TIMING=1 可在 docker logs 中看到每步分段耗时。
+        self._timing_enabled = os.environ.get("UNICARLA_ADS_STEP_TIMING") == "1"
 
     def initialize(self, agent_config=None, agent_path=None):
         """创建 LEAD Agent；模型在取得路线后于 deploy 阶段加载。"""
@@ -39,6 +53,14 @@ class LeadAdapter:
                 raise RuntimeError("initialize 只能在 CREATED 状态调用")
             self.state = "INITIALIZING"
             try:
+                # LEAD 的评估录制只有在 SAVE_PATH 存在时才会启用；视频先落在
+                # 容器临时目录，download_gui 时再结束编码并读回。
+                if not os.environ.get("SAVE_PATH"):
+                    os.environ["SAVE_PATH"] = tempfile.mkdtemp(
+                        prefix="unicarla_lead_gui_"
+                    )
+                os.environ.setdefault("BENCHMARK_ROUTE_ID", "unicarla")
+
                 from lead.evaluation.agents.transfuser.transfuser_agent import (
                     TransfuserAgent,
                 )
@@ -130,6 +152,20 @@ class LeadAdapter:
                 finally:
                     timm.create_model = original_create_model
 
+                # 打开 LEAD 自带的评估录制：grid 视频由演示视角与模型输入
+                # 拼接而成，相当于 InterFuser 的 GUI 画面。
+                self._agent.lead_config.evaluation.apply_overrides(
+                    {
+                        "produce_demo_video": True,
+                        "produce_grid_video": True,
+                    },
+                    is_user_override=True,
+                )
+
+                # 部署时先空跑几次前向，让 cudnn 的逐形状基准搜索发生在部署阶段，
+                # 避免行驶阶段第一次前向阻塞数秒。
+                self._warmup_agent()
+
                 self._sensor_interface = FrameSensorInterface()
                 self._agent.sensor_interface = self._sensor_interface
                 self._agent_wrapper = AgentWrapper(self._agent)
@@ -146,6 +182,56 @@ class LeadAdapter:
                 self.state = "ERROR"
                 self.last_error = str(exc)
                 raise
+
+    def _warmup_agent(self):
+        """用零填充的伪输入空跑几次前向，完成 cudnn 逐形状基准与惰性初始化。"""
+        import torch
+
+        policy = self._agent.policy
+        runner = self._agent.policy_runner
+        config = policy.config
+        features = {
+            "town": self._map_name.split("/")[-1],
+            "rgb": np.zeros(
+                (3, config.final_image_height, config.final_image_width),
+                np.float32,
+            ),
+            "rasterized_lidar": np.zeros(
+                (1, config.lidar_height_pixel, config.lidar_width_pixel),
+                np.float32,
+            ),
+            "radar": np.zeros(
+                (
+                    policy.lead_config.expert.sensor_rig.num_radar_sensors
+                    * config.num_radar_points_per_sensor,
+                    5,
+                ),
+                np.float32,
+            ),
+            "previous_target_point": np.zeros(2, np.float32),
+            "target_point": np.zeros(2, np.float32),
+            "next_target_point": np.zeros(2, np.float32),
+            "speed": 0.0,
+        }
+        batch = policy.features_to_batch(features, runner.device)
+        start = time.perf_counter()
+        try:
+            for _ in range(3):
+                runner.forward(batch)
+            torch.cuda.synchronize()
+        except Exception as exc:  # 预热失败不阻塞部署，行为退回原状。
+            print(
+                "LEAD 模型预热失败（不影响运行）: {}".format(exc),
+                flush=True,
+            )
+            return
+        print(
+            "LEAD 模型预热完成: 3 次前向共 {:.2f}s，设备 {}".format(
+                time.perf_counter() - start,
+                runner.device,
+            ),
+            flush=True,
+        )
 
     def step(self, frame_id, timeout=None):
         """读取外部已经推进完成的 frame，并返回 LEAD 控制信号。"""
@@ -186,11 +272,24 @@ class LeadAdapter:
                 frame_id,
             )
 
+            if self._timing_enabled:
+                t0 = time.perf_counter()
             sensor_data = self._sensor_interface.get_data(
                 frame_id,
                 self._sensor_timeout if timeout is None else float(timeout),
             )
+            if self._timing_enabled:
+                t1 = time.perf_counter()
             control = self._agent.run_step(sensor_data, GameTime.get_time())
+            if self._timing_enabled:
+                print(
+                    "[timing] frame={} 传感器等待={:.3f}s 模型推理={:.3f}s".format(
+                        frame_id,
+                        t1 - t0,
+                        time.perf_counter() - t1,
+                    ),
+                    flush=True,
+                )
             result = {
                 "frame_id": frame_id,
                 "control": {
@@ -232,6 +331,56 @@ class LeadAdapter:
                     )
                 )
             time.sleep(0.005)
+
+    def render_gui_video(self, fps=20.0):
+        """结束评估视频编码，返回本次仿真的 MP4 字节。
+
+        fps 参数仅为与 InterFuser 的下载接口保持一致；LEAD 录制时已按
+        evaluation.video_fps 固定帧率，因此这里忽略该参数。
+        """
+        del fps
+        with self._lock:
+            self._close_gui_writers()
+            video_path = self._find_gui_video()
+            if video_path is None:
+                raise RuntimeError("当前没有可下载的 LEAD 视频")
+            with open(video_path, "rb") as video_file:
+                return video_file.read()
+
+    def _close_gui_writers(self):
+        """关闭 ffmpeg 编码器，让视频文件写入完整尾部后再读取。"""
+        if self._agent is None:
+            return
+        recorder = getattr(self._agent, "video_recorder", None)
+        if recorder is None:
+            return
+        for name in (
+            "grid_video_writer",
+            "demo_video_writer",
+            "debug_video_writer",
+            "input_video_writer",
+        ):
+            writer = getattr(recorder, name, None)
+            if writer is not None:
+                writer.release()
+                setattr(recorder, name, _SilentVideoWriter())
+
+    def _find_gui_video(self):
+        """按信息量从多到少返回已录制的评估视频路径。"""
+        if self._agent is None:
+            return None
+        evaluation = self._agent.lead_config.evaluation
+        if evaluation.save_path is None:
+            return None
+        for path in (
+            evaluation.grid_video_path,
+            evaluation.demo_video_path,
+            evaluation.debug_video_path,
+            evaluation.input_video_path,
+        ):
+            if os.path.exists(path) and os.path.getsize(path) > 0:
+                return path
+        return None
 
     def status(self):
         sensor_ids = []

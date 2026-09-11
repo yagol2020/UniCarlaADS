@@ -161,8 +161,13 @@ def main():
     except KeyboardInterrupt:
         print("收到中断，正在结束仿真")
     finally:
-        # 先清理 LEAD 传感器，再销毁其依附的 ego。
+        # 先下载 LEAD 评估视频，再清理传感器和模型。
         if ads_initialized:
+            try:
+                video_path = ads.download_gui()
+                print("GUI 视频已下载到 {}".format(video_path))
+            except Exception as exc:
+                print("GUI 视频下载失败: {}".format(exc))
             ads.close()
         if ego is not None:
             ego.destroy()

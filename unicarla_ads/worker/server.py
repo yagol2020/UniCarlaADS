@@ -2,6 +2,7 @@
 
 import json
 import os
+from concurrent.futures import ThreadPoolExecutor
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 def _create_adapter():
@@ -19,6 +20,11 @@ def _create_adapter():
 
 ADAPTER = _create_adapter()
 
+# cudnn 的基准缓存是线程本地的；HTTP 每请求一线程会导致每次 step
+# 都重新做一遍逐形状基准搜索（数十秒级）。所有 ADAPTER 调用固定在
+# 这个常驻线程上执行，保证模型状态和 cudnn 缓存只初始化一次。
+EXECUTOR = ThreadPoolExecutor(max_workers=1)
+
 
 class RequestHandler(BaseHTTPRequestHandler):
     """处理单实例 ADS 接口。"""
@@ -27,7 +33,7 @@ class RequestHandler(BaseHTTPRequestHandler):
         if self.path == "/health":
             self._write_json(200, {"ok": True})
         elif self.path == "/status":
-            self._write_json(200, ADAPTER.status())
+            self._write_json(200, EXECUTOR.submit(ADAPTER.status).result())
         else:
             self._write_json(404, {"error": "接口不存在"})
 
@@ -35,25 +41,30 @@ class RequestHandler(BaseHTTPRequestHandler):
         try:
             payload = self._read_json()
             if self.path == "/initialize":
-                result = ADAPTER.initialize(
+                result = EXECUTOR.submit(
+                    ADAPTER.initialize,
                     agent_config=payload.get("agent_config"),
                     agent_path=payload.get("agent_path"),
-                )
+                ).result()
             elif self.path == "/deploy":
-                result = ADAPTER.deploy(payload)
+                result = EXECUTOR.submit(ADAPTER.deploy, payload).result()
             elif self.path == "/step":
-                result = ADAPTER.step(
+                result = EXECUTOR.submit(
+                    ADAPTER.step,
                     payload["frame_id"],
                     timeout=payload.get("timeout"),
-                )
+                ).result()
             elif self.path == "/download_gui":
                 if not hasattr(ADAPTER, "render_gui_video"):
                     raise RuntimeError("当前 ADS 不支持 GUI 视频下载")
-                video = ADAPTER.render_gui_video(payload.get("fps", 20.0))
+                video = EXECUTOR.submit(
+                    ADAPTER.render_gui_video,
+                    payload.get("fps", 20.0),
+                ).result()
                 self._write_binary(200, video, "video/mp4")
                 return
             elif self.path == "/close":
-                result = ADAPTER.close()
+                result = EXECUTOR.submit(ADAPTER.close).result()
             else:
                 self._write_json(404, {"error": "接口不存在"})
                 return
