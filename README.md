@@ -13,14 +13,14 @@
 
 ---
 
+> [!NOTE]
+> 本项目主要由 AI 辅助（vibe coding）开发，使用前请结合自身场景评估/修改/改进。
+
+---
+
 ## 简介
 
-UniCarlaADS 将不同自动驾驶系统（ADS）统一封装进 Docker 容器，通过 HTTP 接口对外提供
-`init / deploy / step / download_gui / close` 服务。
-
-核心原则：**仿真场景由外部程序推进**。外部程序负责创建 ego、设置同步模式、调用
-`world.tick()` 并应用控制信号；ADS 容器只负责加载模型、部署传感器，并根据外部产生的
-frame 返回控制量。
+UniCarlaADS 将不同自动驾驶系统（ADS）统一封装进 Docker 容器，通过 HTTP 接口对外提供服务。
 
 ## 架构
 
@@ -47,12 +47,12 @@ flowchart LR
     API --> ADAPTER --> MODEL
 ```
 
-## 支持矩阵
+## 目前支持的ADS
 
 | ADS | CARLA | ego 车辆 | 说明 |
 | --- | --- | --- | --- |
 | InterFuser | 0.9.10.1 | `vehicle.lincoln.mkz2017` | 镜像内使用 `agents09101`，Python API 取自官方 CARLA 镜像 |
-| LEAD | 0.9.15 | `vehicle.lincoln.mkz_2020` | 复用上游 Leaderboard / ScenarioRunner / seed0 检查点，不修改 `lead/` 源码 |
+| LEAD | 0.9.15 | `vehicle.lincoln.mkz_2020` | 复用上游 Leaderboard / ScenarioRunner / seed0 检查点 |
 
 ## 快速开始
 
@@ -127,28 +127,9 @@ sequenceDiagram
 | `download_gui()` | `POST /download_gui` | 将 GUI 视频导出到宿主机 `video_download/` |
 | `close()` | `POST /close` | 清理传感器与模型，停止容器 |
 
-### 最小示例
+### 运行示例
 
-```python
-from service import ADS
-
-ads = ADS("interfuser")
-ads.init()
-ads.deploy(ego_actor_id=ego.id, route=[{"x": 5.7, "y": 91.5}, {"x": 35.0, "y": 69.2}])
-
-try:
-    while True:
-        frame_id = world.tick()          # 外部程序推进场景
-        control = ads.step(frame_id)["control"]
-        ego.apply_control(carla.VehicleControl(
-            steer=control["steer"],
-            throttle=control["throttle"],
-            brake=control["brake"],
-        ))
-finally:
-    print(ads.download_gui())            # 需在 close() 前调用
-    ads.close()
-```
+请参考`demo.py`文件
 
 ## ADS 说明
 
@@ -217,7 +198,4 @@ UniCarlaADS/
 }
 ```
 
----
 
-> [!NOTE]
-> 本项目主要由 AI 辅助（vibe coding）开发，使用前请结合自身场景评估/修改/改进。
