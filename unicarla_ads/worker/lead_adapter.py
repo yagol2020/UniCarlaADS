@@ -3,6 +3,8 @@
 import threading
 import time
 
+import numpy as np
+
 from .frame_sensor_interface import FrameSensorInterface
 
 
@@ -177,9 +179,10 @@ class LeadAdapter:
                 + velocity.y * forward.y
                 + velocity.z * forward.z
             )
+            # LEAD 期望 speed 为 numpy 标量（内部会调用 .item()）。
             self._sensor_interface.update_sensor(
                 "speed",
-                {"speed": forward_speed},
+                {"speed": np.float64(forward_speed)},
                 frame_id,
             )
 

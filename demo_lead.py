@@ -8,7 +8,7 @@ try:
     import carla
 except ImportError as exc:
     raise RuntimeError(
-        "未找到 CARLA Python API，请在 Python 3.10-3.12 环境安装 carla==0.9.16"
+        "未找到 CARLA Python API，请在 Python 3.7-3.10 环境安装 carla==0.9.15"
     ) from exc
 
 from service import ADS
@@ -86,13 +86,13 @@ def main():
     client.set_timeout(20.0)
     client_version = client.get_client_version()
     server_version = client.get_server_version()
-    if not client_version.startswith("0.9.16"):
+    if not client_version.startswith("0.9.15"):
         raise RuntimeError(
-            "LEAD 宿主侧需要 CARLA 0.9.16 API，当前为 {}".format(client_version)
+            "LEAD 宿主侧需要 CARLA 0.9.15 API，当前为 {}".format(client_version)
         )
-    if not server_version.startswith("0.9.16"):
+    if not server_version.startswith("0.9.15"):
         raise RuntimeError(
-            "LEAD 需要 CARLA 0.9.16 服务端，当前为 {}".format(server_version)
+            "LEAD 需要 CARLA 0.9.15 服务端，当前为 {}".format(server_version)
         )
 
     world = client.get_world()

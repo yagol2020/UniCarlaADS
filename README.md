@@ -7,7 +7,7 @@ UniCarlaADS 不推进仿真场景：外部程序负责创建 ego、调用 `world
 | ADS | CARLA | ego 车辆 |
 | --- | --- | --- |
 | InterFuser | 0.9.10.1 | `vehicle.lincoln.mkz2017` |
-| LEAD | 0.9.16 | `vehicle.lincoln.mkz_2020` |
+| LEAD | 0.9.15 | `vehicle.lincoln.mkz_2020` |
 
 InterFuser 镜像内使用仓库中的 `agents09101`，其 CARLA Python API 则从官方 `carlasim/carla:0.9.10.1` 镜像取得。
 
@@ -71,7 +71,7 @@ finally:
 
 ## LEAD
 
-LEAD 使用独立镜像，并复用其仓库自带的 CARLA 0.9.16 agents、标准 Leaderboard、ScenarioRunner 和默认 seed0 检查点。集成代码不会修改 `lead/` 源码。
+LEAD 使用独立镜像，并复用其仓库自带的标准 Leaderboard、ScenarioRunner 和默认 seed0 检查点。容器内使用 CARLA 0.9.15 Python API（LEAD 上游说明仅仿真运行时可用 0.9.15）。集成代码不会修改 `lead/` 源码。
 
 构建 LEAD 镜像：
 
@@ -79,17 +79,17 @@ LEAD 使用独立镜像，并复用其仓库自带的 CARLA 0.9.16 agents、标�
 ./scripts/build_lead.sh
 ```
 
-首次构建需要下载 LEAD 对应的 PyTorch 2.8 CUDA 12.8 基础镜像，体积较大。启动官方 CARLA 0.9.16 镜像：
+首次构建需要下载 LEAD 对应的 PyTorch 2.8 CUDA 12.8 基础镜像，体积较大。启动官方 CARLA 0.9.15 镜像：
 
 ```bash
-./scripts/start_carla_0916.sh
+./scripts/start_carla_0915.sh
 ```
 
-宿主侧示例需要 CARLA 0.9.16 Python API，可在 Python 3.10 至 3.12 环境安装：
+宿主侧示例需要 CARLA 0.9.15 Python API，可在 Python 3.7 至 3.10 环境安装：
 
 ```bash
-python3.10 -m pip install carla==0.9.16
-python3.10 demo_lead.py
+python3.8 -m pip install carla==0.9.15
+python3.8 demo_lead.py
 ```
 
 LEAD 要求 world 使用同步模式和 `fixed_delta_seconds=0.05`，ego 的 `role_name` 必须为 `hero`。`deploy()` 使用 LEAD 原有传感器包装器预热传感器，因此部署阶段会产生 10 个 tick；`setup_frame` 是预热后的帧。进入运行阶段后，只有外部程序调用 `world.tick()`，LEAD 的 `step(frame_id)` 只读取该帧并返回控制信号。

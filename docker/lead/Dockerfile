@@ -8,16 +8,24 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libgl1 \
     libglib2.0-0 \
     libturbojpeg \
+    python3.10 \
+    python3.10-venv \
     && rm -rf /var/lib/apt/lists/*
 
-# 与 LEAD 声明的 PyTorch 2.8 环境保持一致。
-RUN python -m pip install --no-cache-dir \
+# LEAD 仿真运行使用 CARLA 0.9.15，其 PythonAPI 只发布到 cp310，
+# 因此单独建 Python 3.10 环境；PyTorch 仍与 LEAD 声明的 2.8 一致。
+RUN python3.10 -m venv /opt/venv310
+ENV PATH=/opt/venv310/bin:$PATH
+
+RUN python -m pip install --no-cache-dir --upgrade pip \
+    && python -m pip install --no-cache-dir \
+    "torch==2.8.0" \
     "torchvision==0.23.0" \
     --index-url https://download.pytorch.org/whl/cu128
 
 RUN python -m pip install --no-cache-dir \
     "setuptools==81" \
-    "carla==0.9.16" \
+    "carla==0.9.15" \
     "beartype==0.21" \
     "filterpy==1.4.5" \
     "huggingface-hub[hf_xet]==0.36.2" \
@@ -48,17 +56,20 @@ RUN python -m pip install --no-cache-dir \
     "typing-extensions>=4.12,<5" \
     "xmlschema==1.0.18"
 
+# pandas 3.x 要求 Python >= 3.11，py123d 只需要 2.x 的 API。
 RUN python -m pip install --no-cache-dir \
     "cachetools==7.1.8" \
     "DracoPy==2.0.0" \
     "laspy[lazrs]==2.7.0" \
-    "pandas==3.0.5" \
+    "pandas==2.3.3" \
     "pyarrow==25.0.1" \
     "ray==2.58.0"
 
 # 只安装 py123d 本体；上面已补齐在线推理导入链所需依赖。
 RUN python -m pip install --no-cache-dir --no-deps \
     "py123d @ https://codeload.github.com/kesai-labs/py123d/tar.gz/4d20a6cfd50f7966647448084f6482c0b65effff"
+
+RUN python -m pip install --no-cache-dir pexpect==4.9
 
 COPY lead /opt/lead
 COPY unicarla_ads /opt/unicarlaads/unicarla_ads
