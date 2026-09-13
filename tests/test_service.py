@@ -23,8 +23,8 @@ class RouteNormalizationTest(unittest.TestCase):
         self.assertEqual(
             route,
             [
-                {"x": 1.0, "y": 2.0, "z": 0.0},
-                {"x": 3.0, "y": 4.0, "z": 5.0},
+                {"x": 1.0, "y": 2.0, "z": 0.0, "yaw": 0.0},
+                {"x": 3.0, "y": 4.0, "z": 5.0, "yaw": 0.0},
             ],
         )
 

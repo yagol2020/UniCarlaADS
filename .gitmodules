@@ -4,3 +4,6 @@
 [submodule "lead"]
 	path = lead
 	url = https://github.com/kesai-labs/lead.git
+[submodule "autoware_carla_launch"]
+	path = autoware_carla_launch
+	url = https://github.com/evshary/autoware_carla_launch.git

@@ -15,6 +15,10 @@ def _create_adapter():
         from .lead_adapter import LeadAdapter
 
         return LeadAdapter()
+    if ads_name == "autoware":
+        from .autoware_adapter import AutowareAdapter
+
+        return AutowareAdapter()
     raise RuntimeError("不支持的 ADS: {}".format(ads_name))
 
 

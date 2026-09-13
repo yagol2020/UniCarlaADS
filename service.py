@@ -1,6 +1,7 @@
 """UniCarlaADS 的宿主侧调用入口。"""
 
 import json
+import os
 import subprocess
 import time
 from pathlib import Path
@@ -17,6 +18,7 @@ class ADS:
     DEFAULT_IMAGES = {
         "interfuser": "unicarlaads-interfuser:latest",
         "lead": "unicarlaads-lead:latest",
+        "autoware": "unicarlaads-autoware:latest",
     }
 
     def __init__(
@@ -26,6 +28,7 @@ class ADS:
         image=None,
         container_name=None,
         startup_timeout=30.0,
+        volumes=None,
     ):
         if name not in self.DEFAULT_IMAGES:
             raise ValueError("当前支持的 ADS: {}".format(", ".join(self.DEFAULT_IMAGES)))
@@ -35,10 +38,11 @@ class ADS:
         self.image = image or self.DEFAULT_IMAGES[name]
         self.container_name = container_name or "unicarlaads-{}".format(name)
         self.startup_timeout = float(startup_timeout)
+        self.volumes = list(volumes or [])
         self.base_url = "http://127.0.0.1:{}".format(self.port)
         self._container_started = False
 
-    def init(self, agent_config=None):
+    def init(self, agent_config=None, initialize_timeout=300.0):
         """启动 ADS 容器并初始化自动驾驶系统。"""
         if self._container_started:
             raise RuntimeError("ADS 容器已经启动")
@@ -55,6 +59,11 @@ class ADS:
             "host",
             "--gpus",
             "all",
+        ]
+        command += self._extra_run_args()
+        for volume in self.volumes:
+            command += ["--volume", volume]
+        command += [
             "--env",
             "UNICARLA_ADS_PORT={}".format(self.port),
             "--env",
@@ -72,14 +81,18 @@ class ADS:
             payload = {}
             if agent_config is not None:
                 payload["agent_config"] = agent_config
-            return self._request("POST", "/initialize", payload, timeout=300.0)
+            return self._request(
+                "POST", "/initialize", payload, timeout=float(initialize_timeout)
+            )
         except Exception:
             self._stop_container()
             raise
 
-    def initialize(self, agent_config=None):
+    def initialize(self, agent_config=None, initialize_timeout=300.0):
         """兼容更直观的 initialize 命名。"""
-        return self.init(agent_config=agent_config)
+        return self.init(
+            agent_config=agent_config, initialize_timeout=initialize_timeout
+        )
 
     def deploy(
         self,
@@ -88,6 +101,7 @@ class ADS:
         carla_host="127.0.0.1",
         carla_port=2000,
         sensor_timeout=10.0,
+        timeout=120.0,
     ):
         """连接 CARLA、绑定 ego、设置路线并部署传感器。"""
         payload = {
@@ -97,7 +111,7 @@ class ADS:
             "route": self._normalize_route(route),
             "sensor_timeout": float(sensor_timeout),
         }
-        return self._request("POST", "/deploy", payload, timeout=120.0)
+        return self._request("POST", "/deploy", payload, timeout=float(timeout))
 
     def step(self, frame_id, timeout=30.0):
         """计算指定外部 CARLA tick 对应的控制信号。"""
@@ -231,6 +245,23 @@ class ADS:
         )
         self._container_started = False
 
+    def _extra_run_args(self):
+        """Autoware 需要特权模式、共享内存和宿主机用户映射。"""
+        if self.name != "autoware":
+            return []
+        return [
+            "--privileged",
+            "--ipc",
+            "host",
+            "--shm-size=8g",
+            "--ulimit",
+            "memlock=33554432:33554432",
+            "--env",
+            "HOST_UID={}".format(os.getuid()),
+            "--env",
+            "HOST_GID={}".format(os.getgid()),
+        ]
+
     @staticmethod
     def _normalize_route(route):
         if not isinstance(route, (list, tuple)) or len(route) < 2:
@@ -246,6 +277,7 @@ class ADS:
                         "x": float(point["x"]),
                         "y": float(point["y"]),
                         "z": float(point.get("z", 0.0)),
+                        "yaw": float(point.get("yaw", 0.0)),
                     }
                 )
             elif isinstance(point, (list, tuple)) and len(point) >= 2:
@@ -254,6 +286,7 @@ class ADS:
                         "x": float(point[0]),
                         "y": float(point[1]),
                         "z": float(point[2]) if len(point) > 2 else 0.0,
+                        "yaw": float(point[3]) if len(point) > 3 else 0.0,
                     }
                 )
             else:

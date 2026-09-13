@@ -30,6 +30,20 @@
   leaderboard，MIT，Copyright (c) 2019 CARLA
 - Leaderboard / ScenarioRunner：MIT，Copyright (c) 2019 / 2018 CARLA
 
+## Autoware 与 autoware_carla_launch
+
+- autoware_carla_launch：Apache License 2.0，
+  <https://github.com/evshary/autoware_carla_launch>
+  - 版本：submodule 固定在上游 commit `86628e9`
+  - 其嵌套子模块：`zenoh_carla_bridge`（commit `7975212`，Apache-2.0）、
+    `zenoh-plugin-ros2dds`（Apache-2.0 / EPL-2.0）、`autoware_manual_control`（Apache-2.0）
+- Autoware：Apache License 2.0，<https://github.com/autowarefoundation/autoware>
+  - 基础镜像：`ghcr.io/autowarefoundation/autoware:universe-devel-cuda-jazzy-1.8.0`
+  - autoware_carla_launch 发布的 Town01 高精度地图与模型权重不在 git 仓库内，
+    通过上游脚本 `scripts/download_autoware_assets.sh` 下载，遵循上游数据许可。
+- 本项目对 `zenoh_carla_bridge` 的修改（`autoware_overlay/`）属于本项目的 MIT 代码，
+  在构建镜像时覆盖上游文件，submodule 内容保持与上游一致。
+
 ## 基础镜像
 
 `carlasim/carla`、`nvidia/cuda`、`pytorch/pytorch` 等基础镜像由 Docker Hub 拉取，

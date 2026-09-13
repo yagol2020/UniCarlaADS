@@ -6,7 +6,7 @@
 
 ![Docker](https://img.shields.io/badge/Docker-ready-2496ED?style=flat-square&logo=docker&logoColor=white)
 ![CARLA](https://img.shields.io/badge/CARLA-0.9.10.1%20%7C%200.9.15-0B79CE?style=flat-square)
-![ADS](https://img.shields.io/badge/ADS-InterFuser%20%7C%20LEAD-6f42c1?style=flat-square)
+![ADS](https://img.shields.io/badge/ADS-InterFuser%20%7C%20LEAD%20%7C%20Autoware-6f42c1?style=flat-square)
 ![License](https://img.shields.io/badge/License-MIT-green?style=flat-square)
 
 </div>
@@ -53,6 +53,7 @@ flowchart LR
 | --- | --- | --- | --- |
 | InterFuser | 0.9.10.1 | `vehicle.lincoln.mkz2017` | 镜像内使用 `agents09101`，Python API 取自官方 CARLA 镜像 |
 | LEAD | 0.9.15 | `vehicle.lincoln.mkz_2020` | 复用上游 Leaderboard / ScenarioRunner / seed0 检查点 |
+| Autoware | 0.9.16 | `vehicle.tesla.model3`（`role_name=autoware_v1`） | 基于 autoware_carla_launch 的 ROS 2 全栈，只支持 Town01 |
 
 ## 快速开始
 
@@ -66,18 +67,26 @@ git submodule update --init --recursive
 # 1. 下载模型权重（权重不在 git 仓库中）
 ./scripts/download_interfuser_weights.sh   # InterFuser
 ./scripts/download_lead_checkpoint.sh      # LEAD
+./scripts/download_autoware_assets.sh      # Autoware（Town01 地图 + 模型，数 GB）
 
 # 2. 构建 ADS 镜像
 ./scripts/build_interfuser.sh        # InterFuser
 ./scripts/build_lead.sh              # LEAD（首次需下载 PyTorch 2.8 CUDA 12.8 基础镜像）
+./scripts/build_autoware.sh          # Autoware（首次需编译 Rust bridge，耗时较长）
+# 网络受限时可选复用已有缓存：
+#   UNICARLA_CARGO_CACHE=/path/to/rust \
+#   UNICARLA_CARLA_PREBUILD=/path/to/carla-prebuild \
+#   ./scripts/build_autoware.sh
 
 # 3. 启动对应版本的 CARLA 服务
 ./scripts/start_carla_0910.sh        # InterFuser
 ./scripts/start_carla_0915.sh        # LEAD
+./scripts/start_carla_0916.sh        # Autoware
 
 # 4. 在宿主机运行示例
 python3.8 demo.py                    # InterFuser
 python3.8 demo_lead.py               # LEAD
+python3 demo_autoware.py             # Autoware（需要 carla==0.9.16）
 ```
 
 宿主机需要 Docker、NVIDIA Container Toolkit，以及对应版本的 CARLA Python API：
@@ -86,6 +95,8 @@ python3.8 demo_lead.py               # LEAD
 # InterFuser 使用仓库内 carla_package/ 下的 0.9.10 egg（demo.py 已自动加载）
 # LEAD 在 Python 3.7 - 3.10 环境安装
 python3.8 -m pip install carla==0.9.15
+# Autoware 在 Python 3.10 - 3.12 环境安装
+python3 -m pip install carla==0.9.16
 ```
 
 > [!IMPORTANT]
@@ -147,6 +158,27 @@ sequenceDiagram
   为预热后的帧。
 - GUI 视频为 LEAD 自带的评估录制（演示视角与模型输入拼接的 grid 视频）。
 
+### Autoware
+
+- world 需为同步模式且 `fixed_delta_seconds=0.05`，ego 必须是 `vehicle.tesla.model3`
+  且 `role_name=autoware_v1`，地图必须是 `Town01`。
+- 默认开启 `no_rendering_mode`（demo 可用 `--render` 关闭），只运行
+  GNSS/IMU/LiDAR；交通灯相机与录制相机也会跳过，因为无渲染模式相机出不了图。
+  没有 NVIDIA Vulkan 时这同时避免软件渲染拖慢其他传感器。
+- Autoware 是 ROS 2 全栈，`deploy()` 会部署 GNSS/IMU/LiDAR（启用渲染时还有交通灯
+  相机与录制用第三人称相机）、设置初始位姿与路线、请求进入自动驾驶，并内部 tick
+  预热，`setup_frame` 为预热后的帧。
+- 控制回路：Autoware 输出 `actuation_cmd`，容器内 worker 换算为 `VehicleControl`
+  后由 `step()` 返回，宿主调用 `apply_control()` 执行。
+  `autoware_overlay/` 中的 Rust 补丁让 zenoh bridge 不再自行 tick 和写控制。
+- 地图坐标与 CARLA 坐标差一个 y 轴符号，适配器会自动转换；
+  如遇地图类型不同，可用 `UNICARLA_AUTOWARE_Y_FLIP=0` 关闭。
+- `assets-dir` 需要包含完整的 `autoware_data/` 与 `carla_map/Town01/`，
+  可用 `--assets-dir` 指向已有目录复用（例如其他机器下载过的数据）。
+- `download_gui()` 仅在使用 `--render` 运行时可用：worker 在仿真期间缓存录制相机
+  的第三人称画面，调用时编码为 MP4，`output_dir`、`filename`、`fps` 与 InterFuser
+  一致；`no_rendering_mode` 下调用会返回错误。
+
 > [!TIP]
 > `start_carla_0910.sh` 使用 `DISPLAY=`、`SDL_VIDEODRIVER=offscreen` 与 `-opengl`，
 > 可在无头服务器运行。启动时出现 `xdg-user-dir: not found` 是官方镜像的提示，
@@ -156,25 +188,27 @@ sequenceDiagram
 
 ```
 UniCarlaADS/
-├── demo.py / demo_lead.py     # 宿主侧示例
+├── demo.py / demo_lead.py / demo_autoware.py  # 宿主侧示例
 ├── service.py                 # 宿主侧 ADS 调用入口
-├── docker/                    # InterFuser 与 LEAD 的 Dockerfile
+├── docker/                    # InterFuser / LEAD / Autoware 的 Dockerfile
 ├── scripts/                   # 构建、启动与权重下载脚本
 ├── unicarla_ads/worker/       # 容器内 HTTP 服务与适配器
+├── autoware_overlay/          # 需要编译的上游文件修改（Dockerfile 动态替换）
 ├── InterFuser/  lead/         # 上游 ADS 源码（submodule，固定上游 commit，不修改）
+├── autoware_carla_launch/     # Autoware 启动与桥接源码（submodule，不修改）
 ├── video_download/            # GUI 视频输出目录
 ├── LICENSE                    # 本项目 MIT 许可
 └── THIRD_PARTY_NOTICES.md     # 第三方许可声明
 ```
 
 > [!NOTE]
-> `InterFuser/` 与 `lead/` 是 git submodule，分别固定在上游 `f0be8ea`（InterFuser）
-> 与 `v1.5.0`（LEAD）两个 commit，运行时的差异（GUI 捕获、禁用联网下载等）都在
-> `unicarla_ads/worker/` 适配器里完成，子模块内容保持与上游一致。
+> `InterFuser/`、`lead/` 与 `autoware_carla_launch/` 都是 git submodule，固定在上游
+> commit，运行时的差异都通过 `unicarla_ads/worker/` 适配器或 `autoware_overlay/`
+> 在构建/运行时动态替换，子模块内容保持与上游一致。
 
 ## 许可证与致谢
 
-本项目采用 [MIT License](LICENSE)。第三方组件（InterFuser、LEAD、CARLA 等）的许可与版权归属
+本项目采用 [MIT License](LICENSE)。第三方组件（InterFuser、LEAD、Autoware、CARLA 等）的许可与版权归属
 见 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)。
 
 ## 引用
