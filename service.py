@@ -249,7 +249,7 @@ class ADS:
         """Autoware 需要特权模式、共享内存和宿主机用户映射。"""
         if self.name != "autoware":
             return []
-        return [
+        args = [
             "--privileged",
             "--ipc",
             "host",
@@ -261,6 +261,15 @@ class ADS:
             "--env",
             "HOST_GID={}".format(os.getgid()),
         ]
+        # 允许宿主用环境变量关闭红绿灯识别（镜像内默认开启）或选择桥接方式。
+        for name in (
+            "UNICARLA_AUTOWARE_TRAFFIC_LIGHT",
+            "UNICARLA_AUTOWARE_BRIDGE_MODE",
+        ):
+            value = os.environ.get(name)
+            if value is not None:
+                args += ["--env", "{}={}".format(name, value)]
+        return args
 
     @staticmethod
     def _normalize_route(route):

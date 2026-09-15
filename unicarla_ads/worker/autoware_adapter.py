@@ -125,6 +125,26 @@ class AutowareAdapter:
         )
         self._strict = os.environ.get("UNICARLA_AUTOWARE_STRICT") == "1"
         self._y_flip = os.environ.get("UNICARLA_AUTOWARE_Y_FLIP", "1") == "1"
+        self._traffic_light = (
+            os.environ.get("UNICARLA_AUTOWARE_TRAFFIC_LIGHT", "1") == "1"
+        )
+        self._bridge_mode = (
+            os.environ.get("UNICARLA_AUTOWARE_BRIDGE_MODE", "ros2dds").strip().lower()
+        )
+        if self._bridge_mode not in ("ros2dds", "rmw-zenoh"):
+            raise RuntimeError(
+                "不支持的桥接方式 {}，可选 ros2dds / rmw-zenoh".format(self._bridge_mode)
+            )
+
+    def _apply_bridge_env(self):
+        """rmw-zenoh 模式：本进程的 rclpy 也走 zenoh，与 bridge 的 v1/ 前缀对齐。"""
+        if self._bridge_mode != "rmw-zenoh":
+            return
+        os.environ["RMW_IMPLEMENTATION"] = "rmw_zenoh_cpp"
+        os.environ["ZENOH_SESSION_CONFIG_URI"] = os.path.join(
+            AUTOWARE_ROOT, "config/RMW_ZENOH_SESSION_CONFIG.json5"
+        )
+        os.environ["ZENOH_CONFIG_OVERRIDE"] = 'namespace="{}"'.format(VEHICLE_NAME)
 
     # ------------------------------------------------------------------
     # 生命周期
@@ -137,8 +157,10 @@ class AutowareAdapter:
                 raise RuntimeError("initialize 只能在 CREATED 状态调用")
             self.state = "INITIALIZING"
             try:
-                self._ros = AutowareRosInterface()
+                # rmw_zenoh 的 RMW 会话要连 bridge 的 7447，先起进程再建 ROS 接口。
+                self._apply_bridge_env()
                 self._start_processes()
+                self._ros = AutowareRosInterface()
                 self._ensure_carla_connected()
                 # Autoware 的 use_sim_time 节点需要 /clock，地图加载也依赖进程定期 tick。
                 self._start_tick_driver()
@@ -167,61 +189,79 @@ class AutowareAdapter:
             AUTOWARE_ROOT,
             "external/zenoh_carla_bridge/target/release/zenoh_carla_bridge",
         )
-        ros2dds = os.path.join(
-            AUTOWARE_ROOT,
-            "external/zenoh-plugin-ros2dds/target/release/zenoh-bridge-ros2dds",
-        )
-        if not os.path.exists(bridge) or not os.path.exists(ros2dds):
+        if not os.path.exists(bridge):
             raise RuntimeError("缺少已编译的 zenoh bridge，请先构建镜像")
 
+        if self._bridge_mode == "rmw-zenoh":
+            # bridge 自己就是 zenoh router，Autoware 用 rmw_zenoh 直连 7447。
+            bridge_mode = "rmw-zenoh"
+            bridge_config = "rmw-zenoh-carla-bridge-conf.json5"
+        else:
+            bridge_mode = "ros2"
+            bridge_config = "zenoh-carla-bridge-conf.json5"
+
+        # ZENOH_CONFIG_OVERRIDE 只给 RMW 会话，bridge 按自己的配置文件启动。
+        bridge_env = dict(env)
+        bridge_env.pop("ZENOH_CONFIG_OVERRIDE", None)
         self._processes.append(
             _ManagedProcess(
                 "zenoh_carla_bridge",
                 [
                     bridge,
                     "--mode",
-                    "ros2",
+                    bridge_mode,
                     "--zenoh-listen",
                     "tcp/0.0.0.0:7447",
                     "--zenoh-config",
-                    os.path.join(AUTOWARE_ROOT, "config/zenoh-carla-bridge-conf.json5"),
+                    os.path.join(AUTOWARE_ROOT, "config", bridge_config),
                     "--carla-address",
                     env.get("CARLA_SIMULATOR_IP", "127.0.0.1"),
                 ],
                 log_dir,
-                env=env,
+                env=bridge_env,
             )
         )
         # 先让 zenoh_carla_bridge 监听 7447。
         time.sleep(2.0)
 
-        self._processes.append(
-            _ManagedProcess(
-                "zenoh_bridge_ros2dds",
-                [
-                    ros2dds,
-                    "-n",
-                    "/{}".format(VEHICLE_NAME),
-                    "-d",
-                    os.environ.get("ROS_DOMAIN_ID", "0"),
-                    "-c",
-                    os.path.join(
-                        AUTOWARE_ROOT, "config/zenoh-bridge-ros2dds-conf.json5"
-                    ),
-                    "-e",
-                    "tcp/127.0.0.1:7447",
-                ],
-                log_dir,
-                env=env,
+        if self._bridge_mode == "ros2dds":
+            ros2dds = os.path.join(
+                AUTOWARE_ROOT,
+                "external/zenoh-plugin-ros2dds/target/release/zenoh-bridge-ros2dds",
             )
-        )
+            if not os.path.exists(ros2dds):
+                raise RuntimeError("缺少已编译的 zenoh bridge，请先构建镜像")
+            self._processes.append(
+                _ManagedProcess(
+                    "zenoh_bridge_ros2dds",
+                    [
+                        ros2dds,
+                        "-n",
+                        "/{}".format(VEHICLE_NAME),
+                        "-d",
+                        os.environ.get("ROS_DOMAIN_ID", "0"),
+                        "-c",
+                        os.path.join(
+                            AUTOWARE_ROOT, "config/zenoh-bridge-ros2dds-conf.json5"
+                        ),
+                        "-e",
+                        "tcp/127.0.0.1:7447",
+                    ],
+                    log_dir,
+                    env=env,
+                )
+            )
 
         launch_command = (
             "source /opt/autoware/setup.bash"
             " && source {root}/install/setup.bash"
             " && exec ros2 launch autoware_carla_launch autoware_zenoh.launch.xml"
+            " use_traffic_light_recognition:={traffic_light}"
             " manual_control:=false rviz:=false"
-        ).format(root=AUTOWARE_ROOT)
+        ).format(
+            root=AUTOWARE_ROOT,
+            traffic_light="true" if self._traffic_light else "false",
+        )
         self._processes.append(
             _ManagedProcess(
                 "autoware",
@@ -747,12 +787,16 @@ class AutowareAdapter:
             )
         )
 
-        # 交通灯相机只有 use_traffic_light_recognition 开启时才需要。
+        # 交通灯相机供红绿灯识别使用。
         # no_rendering_mode 下相机无法出图，软件渲染（lavapipe）还会拖慢其他传感器。
-        camera_enabled = os.environ.get("UNICARLA_AUTOWARE_TRAFFIC_LIGHT_CAMERA")
-        if camera_enabled is None:
-            camera_enabled = not self._world.get_settings().no_rendering_mode
-        if not camera_enabled:
+        if not self._traffic_light:
+            return
+        if self._world.get_settings().no_rendering_mode:
+            print(
+                "警告: 已启用红绿灯识别，但 no_rendering_mode 下交通灯相机没有图像，"
+                "请用 --render 运行才能识别红绿灯",
+                flush=True,
+            )
             return
 
         extent = ego.bounding_box.extent

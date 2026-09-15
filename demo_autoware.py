@@ -36,7 +36,13 @@ def parse_args():
     parser.add_argument(
         "--render",
         action="store_true",
-        help="开启渲染并录制第三人称视频（默认 no_rendering_mode，只跑 GNSS/IMU/LiDAR）",
+        help="开启渲染并录制视频（红绿灯识别也需要渲染；默认 no_rendering_mode）",
+    )
+    parser.add_argument(
+        "--bridge",
+        choices=("ros2dds", "rmw-zenoh"),
+        default="ros2dds",
+        help="CARLA 数据桥接方式：ros2dds（zenoh-bridge-ros2dds）或 rmw-zenoh",
     )
     parser.add_argument(
         "--vehicle-name",
@@ -132,6 +138,11 @@ def apply_control(ego, values):
 def main():
     args = parse_args()
     random.seed(args.seed)
+    # 容器启动时读取该环境变量选择桥接方式。
+    os.environ["UNICARLA_AUTOWARE_BRIDGE_MODE"] = args.bridge
+
+    if not args.render and os.environ.get("UNICARLA_AUTOWARE_TRAFFIC_LIGHT", "1") == "1":
+        print("提示: 红绿灯识别已启用，但未开启渲染，交通灯相机没有图像；如需识别请加 --render")
 
     assets_dir = Path(args.assets_dir).resolve()
     data_dir = assets_dir / "autoware_data"

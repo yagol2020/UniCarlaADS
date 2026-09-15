@@ -165,6 +165,12 @@ sequenceDiagram
 - 默认开启 `no_rendering_mode`（demo 可用 `--render` 关闭），只运行
   GNSS/IMU/LiDAR；交通灯相机与录制相机也会跳过，因为无渲染模式相机出不了图。
   没有 NVIDIA Vulkan 时这同时避免软件渲染拖慢其他传感器。
+- 红绿灯识别默认启用（`use_traffic_light_recognition:=true`）。识别依赖
+  `traffic_light` 相机，请用 `--render` 运行；无渲染模式下没有图像，仿真中会按
+  “未收到信号灯”处理直接通过路口。可用 `UNICARLA_AUTOWARE_TRAFFIC_LIGHT=0`
+  环境变量关闭识别。
+- 桥接方式可选 `--bridge ros2dds`（默认，zenoh-bridge-ros2dds 转 CycloneDDS）
+  或 `--bridge rmw-zenoh`（Autoware 用 rmw_zenoh 直连 bridge，少一跳，图像流更稳）。
 - Autoware 是 ROS 2 全栈，`deploy()` 会部署 GNSS/IMU/LiDAR（启用渲染时还有交通灯
   相机与录制用第三人称相机）、设置初始位姿与路线、请求进入自动驾驶，并内部 tick
   预热，`setup_frame` 为预热后的帧。

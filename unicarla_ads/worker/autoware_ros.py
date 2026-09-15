@@ -18,8 +18,6 @@ from autoware_adapi_v1_msgs.srv import (
 from autoware_map_msgs.msg import LaneletMapBin
 from autoware_vehicle_msgs.msg import GearCommand, VelocityReport
 from geometry_msgs.msg import Pose, PoseStamped, PoseWithCovarianceStamped
-from rclpy.executors import MultiThreadedExecutor
-from rclpy.qos import DurabilityPolicy, QoSProfile, ReliabilityPolicy
 from rosgraph_msgs.msg import Clock
 from sensor_msgs.msg import Imu, PointCloud2
 from tier4_vehicle_msgs.msg import ActuationCommandStamped
@@ -56,25 +54,29 @@ class ServiceCallError(RuntimeError):
 class AutowareRosInterface:
     """订阅状态/控制话题，并提供 AD API 服务调用。"""
 
-    # 最大兼容的 QoS：发布端更严格时也能收到。
-    _LENIENT_QOS = QoSProfile(
-        depth=10,
-        reliability=ReliabilityPolicy.BEST_EFFORT,
-        durability=DurabilityPolicy.VOLATILE,
-    )
-    # 地图话题一般是 transient_local，晚加入的订阅者需要兼容的 QoS。
-    _MAP_QOS = QoSProfile(
-        depth=1,
-        reliability=ReliabilityPolicy.RELIABLE,
-        durability=DurabilityPolicy.TRANSIENT_LOCAL,
-    )
-
     def __init__(self, node_name="unicarla_autoware_adapter"):
+        # RMW 实现在 import rclpy 时按 RMW_IMPLEMENTATION 决定，必须延后到这里
+        # 导入，适配器才能在建节点前切到 rmw_zenoh。
         import rclpy
+        from rclpy.executors import MultiThreadedExecutor
+        from rclpy.qos import DurabilityPolicy, QoSProfile, ReliabilityPolicy
 
         if not rclpy.ok():
             rclpy.init()
         self._rclpy = rclpy
+
+        # 最大兼容的 QoS：发布端更严格时也能收到。
+        self._LENIENT_QOS = QoSProfile(
+            depth=10,
+            reliability=ReliabilityPolicy.BEST_EFFORT,
+            durability=DurabilityPolicy.VOLATILE,
+        )
+        # 地图话题一般是 transient_local，晚加入的订阅者需要兼容的 QoS。
+        self._MAP_QOS = QoSProfile(
+            depth=1,
+            reliability=ReliabilityPolicy.RELIABLE,
+            durability=DurabilityPolicy.TRANSIENT_LOCAL,
+        )
         self._condition = threading.Condition()
         self._clock_time = None
         self._actuation_cmd = None
