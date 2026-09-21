@@ -29,6 +29,7 @@ class ADS:
         container_name=None,
         startup_timeout=30.0,
         volumes=None,
+        coverage_port=None,
     ):
         if name not in self.DEFAULT_IMAGES:
             raise ValueError("当前支持的 ADS: {}".format(", ".join(self.DEFAULT_IMAGES)))
@@ -39,7 +40,15 @@ class ADS:
         self.container_name = container_name or "unicarlaads-{}".format(name)
         self.startup_timeout = float(startup_timeout)
         self.volumes = list(volumes or [])
+        self.coverage_port = (
+            int(coverage_port) if coverage_port is not None else None
+        )
         self.base_url = "http://127.0.0.1:{}".format(self.port)
+        self.coverage_url = (
+            "http://127.0.0.1:{}".format(self.coverage_port)
+            if self.coverage_port is not None
+            else None
+        )
         self._container_started = False
 
     def init(self, agent_config=None, initialize_timeout=300.0):
@@ -157,6 +166,43 @@ class ADS:
         video_path.write_bytes(video)
         return str(video_path.resolve())
 
+    def download_coverage(
+        self,
+        output_dir="coverage_download",
+        filename=None,
+        timeout=1800.0,
+    ):
+        """下载 gcov/lcov 覆盖率归档（tar.gz，含 coverage.info、summary.txt 与 html/）。
+
+        仅覆盖率镜像支持；调用会先停止容器内 Autoware 进程以触发 gcov 落盘，
+        因此应在视频下载之后再调用。
+        """
+        if self.coverage_url is None:
+            raise RuntimeError("未配置覆盖率服务端口（coverage_port）")
+        output_path = Path(output_dir)
+        output_path.mkdir(parents=True, exist_ok=True)
+        if filename is None:
+            filename = "{}_coverage_{}.tar.gz".format(
+                self.name,
+                time.strftime("%Y%m%d_%H%M%S"),
+            )
+        filename = str(filename)
+        if Path(filename).name != filename:
+            raise ValueError("filename 只能是文件名，不能包含目录")
+        if not filename.lower().endswith(".tar.gz"):
+            filename += ".tar.gz"
+
+        archive = self._request_bytes(
+            "POST",
+            "/download_coverage",
+            {},
+            timeout=float(timeout),
+            base_url=self.coverage_url,
+        )
+        coverage_path = output_path / filename
+        coverage_path.write_bytes(archive)
+        return str(coverage_path.resolve())
+
     def close(self):
         """清理传感器和模型，然后停止容器。"""
         response = None
@@ -182,7 +228,7 @@ class ADS:
                 time.sleep(0.2)
         raise RuntimeError("等待 ADS HTTP 服务超时: {}".format(last_error))
 
-    def _request(self, method, path, payload=None, timeout=30.0):
+    def _request(self, method, path, payload=None, timeout=30.0, base_url=None):
         data = None
         headers = {"Accept": "application/json"}
         if payload is not None:
@@ -190,7 +236,7 @@ class ADS:
             headers["Content-Type"] = "application/json"
 
         http_request = request.Request(
-            self.base_url + path,
+            (base_url or self.base_url) + path,
             data=data,
             headers=headers,
             method=method,
@@ -210,7 +256,7 @@ class ADS:
 
         return json.loads(body) if body else {}
 
-    def _request_bytes(self, method, path, payload=None, timeout=30.0):
+    def _request_bytes(self, method, path, payload=None, timeout=30.0, base_url=None):
         data = None
         headers = {"Accept": "video/mp4"}
         if payload is not None:
@@ -218,7 +264,7 @@ class ADS:
             headers["Content-Type"] = "application/json"
 
         http_request = request.Request(
-            self.base_url + path,
+            (base_url or self.base_url) + path,
             data=data,
             headers=headers,
             method=method,
@@ -269,6 +315,9 @@ class ADS:
             value = os.environ.get(name)
             if value is not None:
                 args += ["--env", "{}={}".format(name, value)]
+        # 指定覆盖率端口时覆盖镜像默认值（worker 由此启动覆盖率服务）。
+        if self.coverage_port is not None:
+            args += ["--env", "UNICARLA_COVERAGE_PORT={}".format(self.coverage_port)]
         return args
 
     @staticmethod

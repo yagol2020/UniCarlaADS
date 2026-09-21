@@ -77,6 +77,8 @@ git submodule update --init --recursive
 #   UNICARLA_CARGO_CACHE=/path/to/rust \
 #   UNICARLA_CARLA_PREBUILD=/path/to/carla-prebuild \
 #   ./scripts/build_autoware.sh
+# 可选：基于上面镜像构建 gcov 插桩的覆盖率镜像 unicarlaads-autoware:coverage
+#   ./scripts/build_autoware_coverage.sh
 
 # 3. 启动对应版本的 CARLA 服务
 ./scripts/start_carla_0910.sh        # InterFuser
@@ -136,6 +138,7 @@ sequenceDiagram
 | `step(frame_id)` | `POST /step` | 返回该 frame 对应的控制量 |
 | `status()` | `GET /status` | 查询 ADS 当前状态 |
 | `download_gui()` | `POST /download_gui` | 将 GUI 视频导出到宿主机 `video_download/` |
+| `download_coverage()` | `POST /download_coverage`（覆盖率端口） | 停止 Autoware 触发 gcov 落盘，导出覆盖率归档到 `coverage_download/` |
 | `close()` | `POST /close` | 清理传感器与模型，停止容器 |
 
 ### 运行示例
@@ -184,6 +187,14 @@ sequenceDiagram
 - `download_gui()` 仅在使用 `--render` 运行时可用：worker 在仿真期间缓存录制相机
   的第三人称画面，调用时编码为 MP4，`output_dir`、`filename`、`fps` 与 InterFuser
   一致；`no_rendering_mode` 下调用会返回错误。
+- 代码覆盖率：`scripts/build_autoware_coverage.sh` 会用 gcov 插桩重编 Autoware
+  感知/预测/规划（含决策）模块，默认 = 两个源码仓库 `planning/` 与 `perception/`
+  下全部约 133 个包（可用 `UNICARLA_COVERAGE_PACKAGES` 缩小范围），产出
+  `unicarlaads-autoware:coverage`（约 96GB，构建约 40 分钟）；`demo_autoware.py --coverage` 使用该
+  镜像并在视频下载后调用 `download_coverage()`，归档（tar.gz）包含 `coverage.info`、
+  `summary.txt` 与 `html/`。分支数据已剔除编译器插入的异常路径分支，只保留源码里的
+  真实条件分支。覆盖率服务监听 `--coverage-port`（默认 8081，仅 `--coverage` 时启用），
+  保存前会 SIGINT 停止 Autoware，因为 libgcov 只在进程退出时写 `.gcda`。
 
 > [!TIP]
 > `start_carla_0910.sh` 使用 `DISPLAY=`、`SDL_VIDEODRIVER=offscreen` 与 `-opengl`，

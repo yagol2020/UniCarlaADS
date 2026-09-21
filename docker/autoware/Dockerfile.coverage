@@ -1,0 +1,59 @@
+# Autoware 覆盖率镜像：在普通镜像基础上，用 gcov 插桩重编 Autoware 决策模块。
+# 运行结束后由 worker 的覆盖率端口触发 lcov 采集（见 autoware_adapter.save_coverage）。
+#
+# 构建入口：scripts/build_autoware_coverage.sh（会准备源码并传入命名构建上下文）。
+FROM unicarlaads-autoware:latest
+
+# 需要插桩重编的包（空格分隔），由构建脚本 --build-arg 传入。
+ARG COVERAGE_PACKAGES=""
+
+# 并行度：Debug + gcov 编译单个大模块内存占用可达数 GB，默认限 4 路，
+# 避免默认按核数并行打满宿主机（可用 UNICARLA_COVERAGE_JOBS 覆盖）。
+ARG COVERAGE_BUILD_JOBS=4
+
+# 1. 同步当前仓库的 worker 代码（基础镜像可能落后于本次修改）。
+COPY --from=worker_src . /opt/unicarlaads/unicarla_ads
+
+# 2. 拷贝 Autoware 源码（autoware_src 目录下需有 autoware_universe/ 与 autoware_core/）。
+RUN --mount=type=bind,from=autoware_src,source=.,target=/mnt/autoware_src \
+    mkdir -p /opt/autoware_gcov/src \
+    && cp -a /mnt/autoware_src/autoware_universe /opt/autoware_gcov/src/ \
+    && cp -a /mnt/autoware_src/autoware_core /opt/autoware_gcov/src/ \
+    && rm -rf /opt/autoware_gcov/src/autoware_universe/.git \
+              /opt/autoware_gcov/src/autoware_core/.git
+
+# 3. 插桩编译：--coverage = -fprofile-arcs -ftest-coverage；Debug 关优化避免内联
+#    导致分支计数失真。未选中的依赖仍使用 /opt/autoware 里的预编译版本。
+#    MAKEFLAGS/CMAKE_BUILD_PARALLEL_LEVEL 限制单包内部的编译并行度。
+RUN bash -lc "source /opt/autoware/setup.bash \
+    && export MAKEFLAGS=-j${COVERAGE_BUILD_JOBS} \
+    && export CMAKE_BUILD_PARALLEL_LEVEL=${COVERAGE_BUILD_JOBS} \
+    && cd /opt/autoware_gcov \
+    && { colcon build --base-paths src/autoware_universe src/autoware_core \
+       --packages-select ${COVERAGE_PACKAGES} \
+       --parallel-workers ${COVERAGE_BUILD_JOBS} \
+       --continue-on-error \
+       --cmake-args -DCMAKE_BUILD_TYPE=Debug \
+         -DCMAKE_C_FLAGS='--coverage' \
+         -DCMAKE_CXX_FLAGS='--coverage' \
+         -DCMAKE_EXE_LINKER_FLAGS='--coverage' \
+         -DCMAKE_SHARED_LINKER_FLAGS='--coverage' \
+       || echo '[coverage] 部分包编译失败，已跳过'; }"
+
+# 4. 用插桩产物覆盖 /opt/autoware 下对应包的 lib/（库与可执行文件）；
+#    包不在基础镜像或没有 lib/ 时跳过。保留源码与 build 树供 lcov/genhtml 使用。
+RUN bash -lc "for pkg in ${COVERAGE_PACKAGES}; do \
+        src=/opt/autoware_gcov/install/\$pkg/lib; \
+        dst=/opt/autoware/\$pkg/lib; \
+        if [ -d \"\$src\" ] && [ -d \"\$dst\" ]; then \
+            cp -a \"\$src\"/. \"\$dst\"/; \
+        fi; \
+    done"
+
+# 5. entrypoint 会把进程降权到宿主 UID（aw 用户），libgcov 需要在该目录写 .gcda，
+#    否则静默失败（日志里表现为 profiling:...gcda:Cannot open）。
+RUN chmod -R a+rwX /opt/autoware_gcov/build
+
+# UNICARLA_COVERAGE_PORT 由 worker 的覆盖率服务监听；宿主侧对其调用 download_coverage。
+ENV UNICARLA_AUTOWARE_COVERAGE_BUILD=/opt/autoware_gcov/build \
+    UNICARLA_COVERAGE_PORT=8081

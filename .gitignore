@@ -3,4 +3,6 @@ AGENTS.md
 __pycache__/
 *.pyc
 /video_download/
+/coverage_download/
+/.cache/
 *.pyc

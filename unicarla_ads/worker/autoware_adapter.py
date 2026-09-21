@@ -7,6 +7,7 @@ VehicleControl 返回给宿主，由宿主 apply_control。Bridge 侧的 Rust
 
 import math
 import os
+import shutil
 import signal
 import subprocess
 import tempfile
@@ -20,6 +21,10 @@ from .autoware_ros import AutowareRosInterface, ServiceCallError, make_pose
 AUTOWARE_ROOT = os.environ.get("AUTOWARE_CARLA_ROOT", "/opt/autoware_carla_launch")
 VEHICLE_NAME = os.environ.get("VEHICLE_NAME", "v1")
 EGO_ROLE_NAME = "autoware_{}".format(VEHICLE_NAME)
+# 覆盖率镜像里插桩构建树的路径；不存在说明当前不是覆盖率镜像。
+COVERAGE_BUILD_ROOT = os.environ.get(
+    "UNICARLA_AUTOWARE_COVERAGE_BUILD", "/opt/autoware_gcov/build"
+)
 
 SAFE_STOP = {
     "steer": 0.0,
@@ -58,11 +63,12 @@ class _ManagedProcess:
         except OSError:
             return ""
 
-    def stop(self):
+    def stop(self, grace=5.0):
+        """SIGINT 结束进程组，超时后 SIGKILL；grace 可放大以等待优雅退出。"""
         if self.process.poll() is None:
             try:
                 os.killpg(os.getpgid(self.process.pid), signal.SIGINT)
-                self.process.wait(timeout=5)
+                self.process.wait(timeout=float(grace))
             except (OSError, subprocess.TimeoutExpired):
                 try:
                     os.killpg(os.getpgid(self.process.pid), signal.SIGKILL)
@@ -1016,6 +1022,74 @@ class AutowareAdapter:
                 os.remove(video_path)
 
     # ------------------------------------------------------------------
+    # 覆盖率导出
+    # ------------------------------------------------------------------
+    def coverage_enabled(self):
+        """当前镜像是否带 gcov 插桩构建树。"""
+        return os.path.isdir(COVERAGE_BUILD_ROOT)
+
+    def save_coverage(self):
+        """停止 Autoware 触发 gcov 落盘，返回 lcov 归档的 tar.gz 字节。
+
+        libgcov 只在进程退出时写 .gcda，因此这里先 SIGINT 优雅结束 Autoware
+        （coverage 镜像无性能要求，等待时间放宽），再运行 lcov/genhtml。
+        需在视频下载之后调用。
+        """
+        with self._lock:
+            if not self.coverage_enabled():
+                raise RuntimeError(
+                    "当前 Autoware 镜像未开启覆盖率编译，"
+                    "请先运行 scripts/build_autoware_coverage.sh"
+                )
+            if self.state != "CLOSED":
+                self._stop_processes(grace=30.0)
+            return self._render_coverage()
+
+    def _render_coverage(self):
+        """在容器内用 lcov 采集行/分支覆盖并打包为 tar.gz。"""
+        work_dir = tempfile.mkdtemp(prefix="unicarla_coverage_")
+        try:
+            script = (
+                "set -e; cd {work}; "
+                "lcov --capture --directory {build} --output-file raw.info "
+                "--branch-coverage --ignore-errors mismatch,gcov,source --quiet; "
+                # 只保留插桩源码，排除 CMake 探针等构建期计数；extract 需显式带
+                # --branch-coverage，否则会丢弃分支数据。
+                "lcov --extract raw.info '*/autoware_universe/*' '*/autoware_core/*' "
+                "--branch-coverage --ignore-errors unused "
+                "--output-file extracted.info --quiet; "
+                # 去掉编译器插入的异常路径分支（BRDA 的 e 块）。lcov 2.0 自带的
+                # --filter branch / geninfo_no_exception_branch 在该版本会把同行的
+                # 真实分支一起删掉，这里自行过滤并让 summary/genhtml 重新统计。
+                "python3 {filter} extracted.info coverage.info; "
+                "lcov --summary coverage.info --branch-coverage > summary.txt 2>&1; "
+                "genhtml coverage.info --output-directory html "
+                "--branch-coverage --ignore-errors source --quiet; "
+                "tar -czf coverage.tar.gz coverage.info summary.txt html"
+            ).format(
+                work=work_dir,
+                build=COVERAGE_BUILD_ROOT,
+                filter=os.path.join(os.path.dirname(__file__), "coverage_filter.py"),
+            )
+            result = subprocess.run(
+                ["bash", "-c", script],
+                capture_output=True,
+                text=True,
+                timeout=1800.0,
+            )
+            if result.returncode != 0:
+                raise RuntimeError(
+                    "采集覆盖率失败: {}".format(
+                        (result.stdout + result.stderr)[-500:]
+                    )
+                )
+            archive_path = os.path.join(work_dir, "coverage.tar.gz")
+            with open(archive_path, "rb") as archive:
+                return archive.read()
+        finally:
+            shutil.rmtree(work_dir, ignore_errors=True)
+
+    # ------------------------------------------------------------------
     # 状态与清理
     # ------------------------------------------------------------------
     def status(self):
@@ -1038,6 +1112,7 @@ class AutowareAdapter:
             "velocity": self._ros.velocity if self._ros is not None else None,
             "video_enabled": self._video_enabled,
             "video_frame_count": len(self._video_frames),
+            "coverage_enabled": self.coverage_enabled(),
         }
 
     def _process_logs(self, lines=15):
@@ -1046,9 +1121,9 @@ class AutowareAdapter:
             for process in self._processes
         )
 
-    def _stop_processes(self):
+    def _stop_processes(self, grace=5.0):
         for process in reversed(self._processes):
-            process.stop()
+            process.stop(grace=grace)
         self._processes = []
 
     def close(self):

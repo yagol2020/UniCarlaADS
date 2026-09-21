@@ -22,6 +22,8 @@ MIN_ROUTE_DISTANCE = 20.0
 MAX_ROUTE_DISTANCE = 80.0
 ARRIVAL_DISTANCE = 5.0
 DEFAULT_ASSETS = Path(__file__).resolve().parent / "autoware_carla_launch"
+COVERAGE_IMAGE = "unicarlaads-autoware:coverage"
+DEFAULT_COVERAGE_PORT = 8081
 
 
 def parse_args():
@@ -60,6 +62,17 @@ def parse_args():
         type=float,
         default=600.0,
         help="deploy 的 HTTP 超时（秒），Autoware 预热较慢",
+    )
+    parser.add_argument(
+        "--coverage",
+        action="store_true",
+        help="使用 gcov 插桩的覆盖率镜像 {}，结束时保存覆盖率".format(COVERAGE_IMAGE),
+    )
+    parser.add_argument(
+        "--coverage-port",
+        type=int,
+        default=DEFAULT_COVERAGE_PORT,
+        help="覆盖率服务端口，仅 --coverage 时生效",
     )
     parser.add_argument("--seed", type=int, help="随机种子")
     return parser.parse_args()
@@ -174,6 +187,8 @@ def main():
 
     ads = ADS(
         "autoware",
+        image=COVERAGE_IMAGE if args.coverage else None,
+        coverage_port=args.coverage_port if args.coverage else None,
         volumes=[
             "{}:{}".format(data_dir, "/opt/autoware_carla_launch/autoware_data"),
             "{}:{}".format(map_dir, "/opt/autoware_carla_launch/carla_map"),
@@ -259,6 +274,13 @@ def main():
                 print("视频已下载到 {}".format(video_path))
             except Exception as exc:
                 print("视频下载失败: {}".format(exc))
+        # 覆盖率保存会停止 Autoware 触发 gcov 落盘，必须在视频下载之后。
+        if ads_initialized and args.coverage:
+            try:
+                coverage_path = ads.download_coverage()
+                print("覆盖率已保存到 {}".format(coverage_path))
+            except Exception as exc:
+                print("覆盖率保存失败: {}".format(exc))
         if ads_initialized:
             ads.close()
         if ego is not None:

@@ -2,6 +2,7 @@
 
 import json
 import os
+import threading
 from concurrent.futures import ThreadPoolExecutor
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
@@ -30,7 +31,35 @@ ADAPTER = _create_adapter()
 EXECUTOR = ThreadPoolExecutor(max_workers=1)
 
 
-class RequestHandler(BaseHTTPRequestHandler):
+class _BaseHandler(BaseHTTPRequestHandler):
+    """JSON/二进制响应的公共实现。"""
+
+    def _read_json(self):
+        length = int(self.headers.get("Content-Length", "0"))
+        if length == 0:
+            return {}
+        return json.loads(self.rfile.read(length).decode("utf-8"))
+
+    def _write_json(self, status, payload):
+        body = json.dumps(payload).encode("utf-8")
+        self.send_response(status)
+        self.send_header("Content-Type", "application/json; charset=utf-8")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+    def _write_binary(self, status, body, content_type):
+        self.send_response(status)
+        self.send_header("Content-Type", content_type)
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+    def log_message(self, format_string, *args):
+        print("[HTTP] " + format_string % args)
+
+
+class RequestHandler(_BaseHandler):
     """处理单实例 ADS 接口。"""
 
     def do_GET(self):
@@ -80,35 +109,43 @@ class RequestHandler(BaseHTTPRequestHandler):
         except Exception as exc:
             self._write_json(500, {"error": str(exc)})
 
-    def _read_json(self):
-        length = int(self.headers.get("Content-Length", "0"))
-        if length == 0:
-            return {}
-        return json.loads(self.rfile.read(length).decode("utf-8"))
 
-    def _write_json(self, status, payload):
-        body = json.dumps(payload).encode("utf-8")
-        self.send_response(status)
-        self.send_header("Content-Type", "application/json; charset=utf-8")
-        self.send_header("Content-Length", str(len(body)))
-        self.end_headers()
-        self.wfile.write(body)
+class CoverageHandler(_BaseHandler):
+    """覆盖率专用端口，只处理覆盖率归档下载。"""
 
-    def _write_binary(self, status, body, content_type):
-        self.send_response(status)
-        self.send_header("Content-Type", content_type)
-        self.send_header("Content-Length", str(len(body)))
-        self.end_headers()
-        self.wfile.write(body)
-
-    def log_message(self, format_string, *args):
-        print("[HTTP] " + format_string % args)
+    def do_POST(self):
+        try:
+            self._read_json()
+            if self.path != "/download_coverage":
+                self._write_json(404, {"error": "接口不存在"})
+                return
+            if not hasattr(ADAPTER, "save_coverage"):
+                raise RuntimeError("当前 ADS 不支持覆盖率保存")
+            archive = EXECUTOR.submit(ADAPTER.save_coverage).result()
+            self._write_binary(200, archive, "application/gzip")
+        except (KeyError, TypeError, ValueError) as exc:
+            self._write_json(400, {"error": str(exc)})
+        except RuntimeError as exc:
+            self._write_json(409, {"error": str(exc)})
+        except Exception as exc:
+            self._write_json(500, {"error": str(exc)})
 
 
 def main():
     port = int(os.environ.get("UNICARLA_ADS_PORT", "8080"))
     server = ThreadingHTTPServer(("0.0.0.0", port), RequestHandler)
     print("ADS Worker listening on 0.0.0.0:{}".format(port))
+
+    # 覆盖率镜像会设置该端口；独立端口避免与主接口互相干扰。
+    coverage_server = None
+    coverage_port = os.environ.get("UNICARLA_COVERAGE_PORT")
+    if coverage_port:
+        coverage_server = ThreadingHTTPServer(
+            ("0.0.0.0", int(coverage_port)), CoverageHandler
+        )
+        threading.Thread(target=coverage_server.serve_forever, daemon=True).start()
+        print("Coverage service listening on 0.0.0.0:{}".format(coverage_port))
+
     try:
         server.serve_forever()
     except KeyboardInterrupt:
@@ -116,6 +153,9 @@ def main():
     finally:
         ADAPTER.close()
         server.server_close()
+        if coverage_server is not None:
+            coverage_server.shutdown()
+            coverage_server.server_close()
 
 
 if __name__ == "__main__":
