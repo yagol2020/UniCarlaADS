@@ -24,6 +24,9 @@ ARRIVAL_DISTANCE = 5.0
 DEFAULT_ASSETS = Path(__file__).resolve().parent / "autoware_carla_launch"
 COVERAGE_IMAGE = "unicarlaads-autoware:coverage"
 DEFAULT_COVERAGE_PORT = 8081
+# 插桩镜像的 Debug+gcov 节点算得慢，coverage 模式默认把仿真节奏放慢 10 倍，
+# 让 Autoware 的 topic rate 诊断能跟上（否则不会进入自动驾驶）。
+COVERAGE_TICK_SCALE = 10.0
 
 
 def parse_args():
@@ -73,6 +76,14 @@ def parse_args():
         type=int,
         default=DEFAULT_COVERAGE_PORT,
         help="覆盖率服务端口，仅 --coverage 时生效",
+    )
+    parser.add_argument(
+        "--tick-scale",
+        type=float,
+        default=None,
+        help="仿真节奏放慢倍数，默认 coverage 模式为 {}，其余为 1".format(
+            COVERAGE_TICK_SCALE
+        ),
     )
     parser.add_argument("--seed", type=int, help="随机种子")
     return parser.parse_args()
@@ -153,9 +164,20 @@ def main():
     random.seed(args.seed)
     # 容器启动时读取该环境变量选择桥接方式。
     os.environ["UNICARLA_AUTOWARE_BRIDGE_MODE"] = args.bridge
+    tick_scale = (
+        args.tick_scale
+        if args.tick_scale is not None
+        else (COVERAGE_TICK_SCALE if args.coverage else 1.0)
+    )
+    if tick_scale < 1.0:
+        raise ValueError("--tick-scale 不能小于 1")
+    # worker 在容器启动时读取该环境变量决定 tick 节奏。
+    os.environ["UNICARLA_AUTOWARE_TICK_SCALE"] = str(tick_scale)
 
     if not args.render and os.environ.get("UNICARLA_AUTOWARE_TRAFFIC_LIGHT", "1") == "1":
         print("提示: 红绿灯识别已启用，但未开启渲染，交通灯相机没有图像；如需识别请加 --render")
+    if tick_scale > 1.0:
+        print("仿真节奏放慢 {} 倍（插桩镜像较慢，需拉长仿真时间）".format(tick_scale))
 
     assets_dir = Path(args.assets_dir).resolve()
     data_dir = assets_dir / "autoware_data"
@@ -237,10 +259,11 @@ def main():
         )
 
         last_tick_wall = None
-        for _ in range(args.max_ticks):
+        tick_interval = FIXED_DELTA_SECONDS * tick_scale
+        for tick_index in range(args.max_ticks):
             # Autoware 是异步栈，按 fixed_delta 的实时节奏推进，避免仿真跑太快。
             if last_tick_wall is not None:
-                sleep_time = FIXED_DELTA_SECONDS - (time.monotonic() - last_tick_wall)
+                sleep_time = tick_interval - (time.monotonic() - last_tick_wall)
                 if sleep_time > 0:
                     time.sleep(sleep_time)
             last_tick_wall = time.monotonic()
@@ -259,6 +282,12 @@ def main():
             )
             apply_control(ego, control)
 
+            if "autoware" not in result and tick_index == 200:
+                print(
+                    "提示: Autoware 仍未进入自动驾驶，若日志报 topic rate 诊断错误，"
+                    "可增大 --tick-scale"
+                )
+
             if distance <= ARRIVAL_DISTANCE:
                 print("ego 已到达终点，距离终点 {:.2f} 米".format(distance))
                 break
@@ -274,7 +303,8 @@ def main():
                 print("视频已下载到 {}".format(video_path))
             except Exception as exc:
                 print("视频下载失败: {}".format(exc))
-        # 覆盖率保存会停止 Autoware 触发 gcov 落盘，必须在视频下载之后。
+        # 覆盖率保存会停止 Autoware 触发 gcov 落盘，必须在视频下载之后、
+        # ads.close() 停止容器之前调用。
         if ads_initialized and args.coverage:
             try:
                 coverage_path = ads.download_coverage()
@@ -286,6 +316,8 @@ def main():
         if ego is not None:
             ego.destroy()
         world.apply_settings(original_settings)
+        # 最后再删除 CARLA 容器，销毁 ego / 还原 world 设置都还需要连接它。
+        os.system("docker rm -f unicarlaads-carla-0916")
 
 
 if __name__ == "__main__":

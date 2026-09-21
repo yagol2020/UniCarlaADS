@@ -195,6 +195,13 @@ sequenceDiagram
   `summary.txt` 与 `html/`。分支数据已剔除编译器插入的异常路径分支，只保留源码里的
   真实条件分支。覆盖率服务监听 `--coverage-port`（默认 8081，仅 `--coverage` 时启用），
   保存前会 SIGINT 停止 Autoware，因为 libgcov 只在进程退出时写 `.gcda`。
+  lcov 采集与 genhtml 默认并行（`min(CPU, 16)` 路，可用
+  `UNICARLA_COVERAGE_LCOV_JOBS` 覆盖），全量归档约 3 分钟。
+- 插桩镜像是 Debug + gcov 构建，节点明显变慢，Autoware 的 topic rate 诊断会失败并
+  拒绝进入自动驾驶（ego 静止）。coverage 模式默认用 `--tick-scale 10` 把仿真节奏
+  放慢 10 倍（`--max-ticks` 相同时墙钟时间也约 10 倍），若日志仍报 topic rate 错误可
+  继续增大；该倍数通过 `UNICARLA_AUTOWARE_TICK_SCALE` 传给容器内 worker。
+  只改 worker 代码重建镜像时不会重跑插桩编译（Dockerfile 中 worker 层在编译层之后）。
 
 > [!TIP]
 > `start_carla_0910.sh` 使用 `DISPLAY=`、`SDL_VIDEODRIVER=offscreen` 与 `-opengl`，

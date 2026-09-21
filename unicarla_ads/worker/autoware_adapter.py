@@ -129,6 +129,11 @@ class AutowareAdapter:
         self._warmup_interval = float(
             os.environ.get("UNICARLA_AUTOWARE_WARMUP_INTERVAL", "0.1")
         )
+        # 覆盖率镜像的 Debug+gcov 节点算得慢，按倍数放慢仿真节奏，让 Autoware
+        # 的 topic rate 诊断能跟上（速率按仿真时间统计）。
+        self._tick_scale = max(
+            1.0, float(os.environ.get("UNICARLA_AUTOWARE_TICK_SCALE", "1"))
+        )
         self._strict = os.environ.get("UNICARLA_AUTOWARE_STRICT") == "1"
         self._y_flip = os.environ.get("UNICARLA_AUTOWARE_Y_FLIP", "1") == "1"
         self._traffic_light = (
@@ -321,7 +326,9 @@ class AutowareAdapter:
         if self._world is None:
             return
         interval = max(
-            0.001, float(self._world.get_settings().fixed_delta_seconds or 0.05)
+            0.001,
+            float(self._world.get_settings().fixed_delta_seconds or 0.05)
+            * self._tick_scale,
         )
         self._tick_error = None
         self._tick_stop = threading.Event()
@@ -465,12 +472,14 @@ class AutowareAdapter:
 
                 self._start_tick_driver()
                 try:
-                    self._wait_sensing_ready(timeout=90.0)
-                    self._initialize_localization_with_retry(timeout=60.0)
-                    self._warmup_until(self._ros_localization_ready, timeout=30.0)
-                    self._set_route(route)
-                    self._warmup_until(self._ros_route_ready, timeout=20.0)
-                    self._warmup_until(self._ready_to_drive, timeout=30.0)
+                    self._wait_sensing_ready(timeout=self._scaled(90.0))
+                    self._initialize_localization_with_retry(timeout=self._scaled(60.0))
+                    self._warmup_until(
+                        self._ros_localization_ready, timeout=self._scaled(30.0)
+                    )
+                    self._set_route(route, timeout=self._scaled(60.0))
+                    self._warmup_until(self._ros_route_ready, timeout=self._scaled(20.0))
+                    self._warmup_until(self._ready_to_drive, timeout=self._scaled(30.0))
                 finally:
                     self._stop_tick_driver()
 
@@ -718,6 +727,10 @@ class AutowareAdapter:
                 return True
             time.sleep(self._warmup_interval)
         return predicate()
+
+    def _scaled(self, seconds):
+        """放慢 tick 时部署阶段的等待时间同步放大。"""
+        return float(seconds) * self._tick_scale
 
     # ------------------------------------------------------------------
     # 传感器
@@ -1046,13 +1059,17 @@ class AutowareAdapter:
             return self._render_coverage()
 
     def _render_coverage(self):
-        """在容器内用 lcov 采集行/分支覆盖并打包为 tar.gz。"""
+        """在容器内用 lcov 并行采集行/分支覆盖并打包为 tar.gz。"""
         work_dir = tempfile.mkdtemp(prefix="unicarla_coverage_")
+        jobs = os.environ.get("UNICARLA_COVERAGE_LCOV_JOBS") or str(
+            min(os.cpu_count() or 4, 16)
+        )
         try:
             script = (
                 "set -e; cd {work}; "
                 "lcov --capture --directory {build} --output-file raw.info "
-                "--branch-coverage --ignore-errors mismatch,gcov,source --quiet; "
+                "--branch-coverage --parallel {jobs} "
+                "--ignore-errors mismatch,gcov,source --quiet; "
                 # 只保留插桩源码，排除 CMake 探针等构建期计数；extract 需显式带
                 # --branch-coverage，否则会丢弃分支数据。
                 "lcov --extract raw.info '*/autoware_universe/*' '*/autoware_core/*' "
@@ -1064,12 +1081,14 @@ class AutowareAdapter:
                 "python3 {filter} extracted.info coverage.info; "
                 "lcov --summary coverage.info --branch-coverage > summary.txt 2>&1; "
                 "genhtml coverage.info --output-directory html "
-                "--branch-coverage --ignore-errors source --quiet; "
+                "--branch-coverage --parallel {jobs} "
+                "--ignore-errors source --quiet; "
                 "tar -czf coverage.tar.gz coverage.info summary.txt html"
             ).format(
                 work=work_dir,
                 build=COVERAGE_BUILD_ROOT,
                 filter=os.path.join(os.path.dirname(__file__), "coverage_filter.py"),
+                jobs=jobs,
             )
             result = subprocess.run(
                 ["bash", "-c", script],

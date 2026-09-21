@@ -311,6 +311,7 @@ class ADS:
         for name in (
             "UNICARLA_AUTOWARE_TRAFFIC_LIGHT",
             "UNICARLA_AUTOWARE_BRIDGE_MODE",
+            "UNICARLA_AUTOWARE_TICK_SCALE",
         ):
             value = os.environ.get(name)
             if value is not None:
