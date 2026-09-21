@@ -1055,7 +1055,9 @@ class AutowareAdapter:
                     "请先运行 scripts/build_autoware_coverage.sh"
                 )
             if self.state != "CLOSED":
-                self._stop_processes(grace=30.0)
+                # coverage 镜像进程多且是 Debug+gcov，退出较慢；等待时间放宽，
+                # 否则被 SIGKILL 的进程不会写 .gcda，导致部分包覆盖率丢失。
+                self._stop_processes(grace=120.0)
             return self._render_coverage()
 
     def _render_coverage(self):
@@ -1067,9 +1069,16 @@ class AutowareAdapter:
         try:
             script = (
                 "set -e; cd {work}; "
-                "lcov --capture --directory {build} --output-file raw.info "
-                "--branch-coverage --parallel {jobs} "
-                "--ignore-errors mismatch,gcov,source --quiet; "
+                # lcov 2.0 的 --capture --parallel 会在子进程退出时删掉共享临时
+                # 目录，偶发丢数据/报错；改为按包目录自己并行采集再合并。
+                "find {build} -mindepth 1 -maxdepth 1 -type d "
+                "-exec sh -c 'find \"$1\" -name \"*.gcda\" -print -quit | grep -q .' "
+                "_ {{}} \\; -print0 | xargs -0 -P {jobs} -I{{}} sh -c "
+                "'lcov --capture --directory \"$1\" --output-file "
+                "\"raw_pkg_$(basename \"$1\").info\" --branch-coverage "
+                "--ignore-errors mismatch,gcov,source,empty,unused --quiet' _ {{}}; "
+                "lcov --add-tracefile 'raw_pkg_*.info' --output-file raw.info "
+                "--branch-coverage --ignore-errors mismatch,empty,unused --quiet; "
                 # 只保留插桩源码，排除 CMake 探针等构建期计数；extract 需显式带
                 # --branch-coverage，否则会丢弃分支数据。
                 "lcov --extract raw.info '*/autoware_universe/*' '*/autoware_core/*' "
